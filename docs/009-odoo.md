@@ -40,4 +40,6 @@ A reply from the Channel (an acknowledgement) is also an internal note on the sa
 
 `scripts/odoo-e2e.ts` runs that path against a live Odoo without starting Harness. A cold poll only records the current highest activity id, so pass `--after-id` as the cursor already held when the activity was created. Credentials stay in the environment and are not printed.
 
+A Harness profile still has to pass GitHub setup before this Source polls: the runtime resolves a repository and an agent `gh` even when the work is an Odoo activity. Put `ODOO_URL`, `ODOO_DB`, `ODOO_USER` and `ODOO_PASSWORD` in the environment of the `dsh` process. The macOS app CLI's process name is `DeepSeek Harness`; `scripts/dsh-superagent` treats that as the service. An installed `dsh` older than `engines.dsh` refuses the bundle until `dsh plugin allow-version` records that exact pair.
+
 The activity id is the Trigger id. Editing the same activity does not open another Ticket. A later activity on the same lead joins that lead's Thread.
