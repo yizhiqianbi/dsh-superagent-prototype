@@ -31,6 +31,7 @@ Read the numbered documents in order; each builds only on the ones before it.
 - [008 Cookbook](docs/008-cookbook.md): adding a Source
 - [009 Odoo](docs/009-odoo.md): the optional CRM activity Source
 - [010 ERP adapter](docs/010-erp-adapter.md): the contract a Source implements to sit on an ERP
+- [011 SOP production progress](docs/011-sop-production-progress.md): chase a manufacturing or sales order, and open Attention when it slips
 
 ## Development
 

@@ -12,9 +12,10 @@ import { sourceContextOf, type SourceContextDeps } from '../src/app/source-conte
 import { Store } from '../src/app/store.ts'
 import { OdooMessagePostSchema, OdooSearchReadSchema, OdooWriteSchema, odooExecutorTools, odooLead, type OdooToolsHost } from '../src/app/tools/odoo.ts'
 import { noteHtml, odooMarker, postOdooNote, sendOdoo } from '../src/sources/odoo-channel.ts'
-import { apply as applyOdoo, odooKind, pollActivities } from '../src/sources/odoo.ts'
-import { OdooClient, odooRecordGone, setOdooTransport, type OdooRpc, type XmlRpcTransport } from '../src/sources/odoo-rpc.ts'
-import { ODOO_MODEL, activityDomain, odooTrigger, type OdooActivity } from '../src/sources/odoo-trigger.ts'
+import { apply as applyOdoo, odooKind, optionalModelStatus, pollActivities, pollHealthDetail } from '../src/sources/odoo.ts'
+import { classifyProduction } from '../src/sources/odoo-progress.ts'
+import { OdooClient, modelUnavailable, odooRecordGone, setOdooTransport, type OdooRpc, type XmlRpcTransport } from '../src/sources/odoo-rpc.ts'
+import { MRP_READ_FIELDS, ODOO_MODEL, SALE_READ_FIELDS, activityDomain, odooTrigger, type OdooActivity } from '../src/sources/odoo-trigger.ts'
 import { OdooFault, decodeResponse, encodeCall, encodeValue } from '../src/sources/odoo-xml.ts'
 import { SourceRegistry } from '../src/sources/registry.ts'
 import { testDeployment } from './fixtures/deployment.ts'
@@ -67,8 +68,14 @@ function fakeRpc(search: (model: string, domain: readonly unknown[]) => Record<s
   const rpc: OdooRpc = {
     uid: async () => AGENT,
     searchRead: async (model, domain, options) => { calls.push({ method: 'search_read', args: [model, domain, options] }); return search(model, domain) },
+    fieldsGet: async model => {
+      calls.push({ method: 'fields_get', args: [model] })
+      const names = model === 'mrp.production' ? MRP_READ_FIELDS : model === 'sale.order' ? SALE_READ_FIELDS : ['id', 'name']
+      return Object.fromEntries(names.map(name => [name, { type: 'char' }]))
+    },
     write: async (model, ids, values) => { calls.push({ method: 'write', args: [model, ids, values] }); return true },
     messagePost: async (model, id, body) => { calls.push({ method: 'message_post', args: [model, id, body] }); return 90 },
+    create: async (model, values) => { calls.push({ method: 'create', args: [model, values] }); return 1 },
   }
   return { rpc, calls }
 }
@@ -88,19 +95,34 @@ describe('odoo trigger', () => {
     expect(odooTrigger(activity(41, { create_uid: [AGENT, 'Agent'] }), AGENT, '')).toBeUndefined()
     expect(odooTrigger(activity(41, { create_uid: false }), AGENT, '')).toBeUndefined()
     expect(odooTrigger(activity(41, { user_id: [9, 'Someone'] }), AGENT, '')?.addressed).toBeUndefined()
+    expect(odooTrigger(activity(50, { res_model: 'mrp.production', res_id: 8 }), AGENT, 'http://127.0.0.1:8069')).toMatchObject({
+      id: key('odoo', 'activity', '50'), threads: [{ source: 'odoo', id: 'mrp.production:8' }],
+      channel: { source: 'odoo', thread: 'odoo:mrp.production:8', address: { model: 'mrp.production', res_id: '8' } },
+      url: 'http://127.0.0.1:8069/web#id=8&model=mrp.production&view_type=form',
+      meta: { model: 'mrp.production', resId: 8, activityId: 50 },
+    })
+    expect(odooTrigger(activity(51, { res_model: 'sale.order', res_id: 4 }), AGENT, '')?.threads).toEqual([{ source: 'odoo', id: 'sale.order:4' }])
+    expect(activityDomain(10, AGENT)).toEqual([['id', '>', 10], ['res_model', 'in', ['crm.lead', 'mrp.production', 'sale.order']], ['user_id', '=', AGENT]])
   })
 
-  it('listens only to crm.lead and names the allowed Odoo users', () => {
+  it('listens to leads, manufacturing orders and sales orders', () => {
     expect(odooKind.schema.parse({})).toEqual({ pollSeconds: 30, failuresBeforeError: 3 })
     expect(() => odooKind.schema.parse({ pollSeconds: 5 })).toThrow()
     expect(odooKind.scope!({ meta: { model: 'crm.lead' } }, odooKind.schema.parse({}))).toEqual({ listened: true, observed: false, row: 'crm.lead' })
-    expect(odooKind.scope!({ meta: { model: 'sale.order' } }, odooKind.schema.parse({}))).toEqual({ listened: false, reason: 'model_not_allowed' })
+    expect(odooKind.scope!({ meta: { model: 'mrp.production' } }, odooKind.schema.parse({}))).toEqual({ listened: true, observed: false, row: 'mrp.production' })
+    expect(odooKind.scope!({ meta: { model: 'sale.order' } }, odooKind.schema.parse({}))).toEqual({ listened: true, observed: false, row: 'sale.order' })
+    expect(odooKind.scope!({ meta: { model: 'res.partner' } }, odooKind.schema.parse({}))).toEqual({ listened: false, reason: 'model_not_allowed' })
     expect(odooKind.policy!.schema.parse({})).toEqual({ allowed: [] })
     expect(() => odooKind.policy!.schema.parse({ allowed: [{ id: 'ada' }] })).toThrow()
-    expect(odooKind.policy!.rows!({})).toEqual([{ id: 'crm.lead', label: { zh: 'CRM 线索', en: 'CRM leads' },
-      note: { zh: '仅指派给智能体的活动', en: 'Activities assigned to the agent' },
-      cells: { listedUnaddressed: false, unlistedAddressed: true, unlistedUnaddressed: false } }])
+    const cells = { listedUnaddressed: false, unlistedAddressed: true, unlistedUnaddressed: false }
+    const note = { zh: '仅指派给智能体的活动', en: 'Activities assigned to the agent' }
+    expect(odooKind.policy!.rows!({})).toEqual([
+      { id: 'crm.lead', label: { zh: 'CRM 线索', en: 'CRM leads' }, note, cells },
+      { id: 'mrp.production', label: { zh: '制造订单', en: 'Manufacturing orders' }, note, cells },
+      { id: 'sale.order', label: { zh: '销售订单', en: 'Sales orders' }, note, cells },
+    ])
     expect(odooKind.find!('see crm.lead/15 please').threads).toEqual(['odoo:crm.lead:15'])
+    expect(odooKind.find!('mrp.production:8').threads).toEqual(['odoo:mrp.production:8'])
     expect(odooKind.environment!.values({ deployment: testDeployment(), config: odooKind.schema.parse({}), trigger: odooTrigger(activity(41), AGENT, '') })).toMatchObject({
       DSH_SUPERAGENT_ODOO_MODEL: 'crm.lead', DSH_SUPERAGENT_ODOO_RES_ID: '15', DSH_SUPERAGENT_ODOO_ACTIVITY: '41',
     })
@@ -111,7 +133,7 @@ describe('odoo trigger', () => {
 describe('odoo poll', () => {
   it('primes the cursor, then takes each new activity once', async () => {
     const h = host()
-    const seen: Record<string, unknown>[][] = [[{ id: 10 }], [activity(11), { id: 12 }, activity(13, { res_model: 'sale.order', res_id: 4 })]]
+    const seen: Record<string, unknown>[][] = [[{ id: 10 }], [activity(11), { id: 12 }, activity(13, { res_model: 'res.partner', res_id: 4 })]]
     const { rpc } = fakeRpc(() => seen.shift() ?? [])
     expect(await pollActivities(h.ctx, rpc, new AbortController().signal)).toMatchObject({ primed: true, afterId: 10, read: 0 })
     expect(h.store.get(KV.odoo.activity)).toEqual({ afterId: 10 })
@@ -140,6 +162,17 @@ describe('odoo poll', () => {
     expect(calls[0]!.args[1]).toEqual(activityDomain(10, AGENT))
     h.close()
   })
+
+  it('stores a manufacturing activity on that order\'s thread', async () => {
+    const h = host()
+    h.store.set(KV.odoo.activity, { afterId: 10 })
+    const round = await pollActivities(h.ctx, fakeRpc(() => [activity(14, { res_model: 'mrp.production', res_id: 8 })]).rpc, new AbortController().signal)
+    expect(round).toMatchObject({ read: 1, unreadable: 0, afterId: 14 })
+    expect(await h.receive.mock.results[0]!.value).toBe('stored')
+    expect(h.engine.candidate(key('odoo', 'activity', '14'))?.strength).toBe('explicit')
+    expect(h.store.threads.get('odoo:mrp.production:8')?.meta.label).toBe('Manufacturing order 8')
+    h.close()
+  })
 })
 
 describe('odoo channel', () => {
@@ -162,8 +195,11 @@ describe('odoo channel', () => {
     await expect(sendOdoo({ commands: {} as Commands }, { id: 'm', kind: 'reply', text: 'hi', channel: { source: 'odoo', thread: 'odoo:crm.lead:0', address: { model: 'crm.lead', res_id: '0' } } })).rejects.toThrow('Missing Odoo reply target')
     const config = odooKind.schema.parse({})
     expect(odooKind.channel?.allowed?.({ model: 'crm.lead', res_id: '15' }, config)).toBe(true)
-    expect(odooKind.channel?.allowed?.({ model: 'sale.order', res_id: '15' }, config)).toBe(false)
+    expect(odooKind.channel?.allowed?.({ model: 'mrp.production', res_id: '8' }, config)).toBe(true)
+    expect(odooKind.channel?.allowed?.({ model: 'sale.order', res_id: '15' }, config)).toBe(true)
+    expect(odooKind.channel?.allowed?.({ model: 'res.partner', res_id: '15' }, config)).toBe(false)
     expect(odooKind.channel!.link({ model: 'crm.lead', res_id: '15' }, {}).url).toBe('http://127.0.0.1:8069/web#id=15&model=crm.lead&view_type=form')
+    expect(odooKind.channel!.link({ model: 'mrp.production', res_id: '8' }, {}).label).toEqual({ zh: 'Odoo 制造订单 8', en: 'Odoo manufacturing order 8' })
   })
 })
 
@@ -198,6 +234,89 @@ describe('odoo tools', () => {
     expect(posted).toEqual({ model: 'crm.lead', res_id: 15, message_id: 90 })
     expect(odooExecutorTools({ store: { triggers: { get: () => undefined } } }, ticket)).toEqual([])
     expect(() => odooLead({ store: { triggers: { get: () => ({ ...trigger, source: 'github' }) } } }, ticket)).toThrow('did not start on Odoo')
+  })
+
+  it('reads a manufacturing snapshot, skips a missing field, and does not offer a field write', async () => {
+    const trigger = odooTrigger(activity(41, { res_model: 'mrp.production', res_id: 8, summary: 'Chase', note: false }), AGENT, '')!
+    const moTicket = { origin: { triggerId: trigger.id } } as Ticket
+    const host = toolsHost()
+    host.rpc = () => {
+      const { rpc } = fakeRpc(() => [{ id: 8, name: 'WH/MO/1', state: 'progress', date_deadline: '2020-01-01', product_qty: 10, qty_produced: 3, product_id: [4, 'Cabinet'] }])
+      rpc.fieldsGet = async () => Object.fromEntries(MRP_READ_FIELDS.filter(field => field !== 'date_finished').map(field => [field, { type: 'char' }]))
+      return rpc
+    }
+    host.host = { store: { triggers: { get: id => id === trigger.id ? trigger : undefined } } }
+    const tools = odooExecutorTools(host.host, moTicket, host.rpc)
+    expect(tools.map(item => item.name)).toEqual(['odoo_search_read', 'odoo_message_post'])
+    expect(tools[0]!.schema.safeParse({ fields: ['stage_id'] }).success).toBe(false)
+    expect(tools[0]!.schema.safeParse({ model: 'crm.lead' }).success).toBe(false)
+    const read = await tools[0]!.execute(tools[0]!.schema.parse({}), new AbortController().signal) as { skipped: string[]; progress: { signal: string; attention: string }; records: unknown[] }
+    expect(read.skipped).toEqual(['date_finished'])
+    expect(read.records).toEqual([{ id: 8, name: 'WH/MO/1', state: 'progress', date_deadline: '2020-01-01', product_qty: 10, qty_produced: 3, product_id: [4, 'Cabinet'] }])
+    expect(read.progress.signal).toBe('shortfall')
+    expect(read.progress.attention).toContain('升级缺料异常')
+    expect(read.progress.attention.length).toBeLessThanOrEqual(1000)
+    const posted = await tools[1]!.execute(tools[1]!.schema.parse({ body: 'Chasing WH/MO/1.' }), new AbortController().signal)
+    expect(posted).toEqual({ model: 'mrp.production', res_id: 8, message_id: 90 })
+    expect(() => odooLead(host.host, moTicket)).toThrow('no crm.lead')
+    const missing = fakeRpc()
+    missing.rpc.fieldsGet = async () => { throw new OdooFault(1, "Object mrp.production doesn't exist") }
+    const again = odooExecutorTools(host.host, moTicket, () => missing.rpc)
+    expect(await again[0]!.execute(again[0]!.schema.parse({}), new AbortController().signal)).toMatchObject({ model: 'mrp.production', unavailable: true, res_id: 8 })
+  })
+
+  it('reads a sales order and does not offer a field write', () => {
+    const sale = odooTrigger(activity(60, { res_model: 'sale.order', res_id: 4 }), AGENT, '')!
+    const tools = odooExecutorTools({ store: { triggers: { get: () => sale } } }, { origin: { triggerId: sale.id } } as Ticket, () => fakeRpc().rpc)
+    expect(tools.map(item => item.name)).toEqual(['odoo_search_read', 'odoo_message_post'])
+    expect(tools[0]!.schema.safeParse({ model: 'sale.order' }).success).toBe(true)
+    expect(tools[0]!.schema.safeParse({ model: 'mrp.production' }).success).toBe(false)
+  })
+})
+
+describe('production progress', () => {
+  const now = new Date('2026-11-04T00:00:00.000Z')
+
+  it('keeps a closed or current order on track and asks with three options otherwise', () => {
+    expect(classifyProduction('mrp.production', { name: 'WH/MO/1', state: 'done', date_deadline: '2026-11-01' }, now)).toEqual({ signal: 'on_track' })
+    expect(classifyProduction('mrp.production', { name: 'WH/MO/1', state: 'progress', date_deadline: '2026-11-04', write_date: '2026-11-03 12:00:00' }, now).signal).toBe('on_track')
+    const stale = classifyProduction('mrp.production', { name: 'WH/MO/1', state: 'progress', date_deadline: '2026-11-10', write_date: '2026-11-01 00:00:00' }, now)
+    expect(stale.recommendation).toBe('chase')
+    expect(stale.attention).toContain('Recommendation: 继续催.')
+    const late = classifyProduction('mrp.production', { name: 'WH/MO/1', state: 'progress', date_deadline: '2026-11-03', product_qty: 10, qty_produced: 10 }, now)
+    expect(late).toMatchObject({ signal: 'overdue', recommendation: 'reschedule' })
+    const short = classifyProduction('mrp.production', { name: 'WH/MO/1', state: 'progress', date_deadline: '2026-11-03', product_qty: 10, qty_produced: 3, product_id: [4, 'Cabinet'] }, now)
+    expect(short.recommendation).toBe('shortage')
+    expect(short.attention).toContain('继续催')
+    expect(short.attention).toContain('建议改期给人确认')
+    expect(short.attention).toContain('升级缺料异常')
+    expect(short.attention).toContain('Recommended.')
+    expect(short.attention).toContain('does not send a customer email')
+    expect(short.attention!.length).toBeLessThanOrEqual(1000)
+    expect(classifyProduction('sale.order', { name: 'S0001', state: 'sale', commitment_date: '2026-11-01 00:00:00', product_qty: 10, qty_produced: 1 }, now).signal).toBe('overdue')
+    expect(classifyProduction('sale.order', { name: 'S0001', state: 'cancel', commitment_date: '2020-01-01' }, now).signal).toBe('on_track')
+    expect(classifyProduction('mrp.production', { state: 'progress', write_date: '2026-11-03 12:00:00' }, now).signal).toBe('on_track')
+    const long = classifyProduction('mrp.production', {
+      name: 'WH/MO/1', state: 'progress', date_deadline: '2020-01-01', product_id: [1, 'P'.repeat(500)], product_qty: 2, qty_produced: 0,
+    }, now)
+    expect(long.attention).toContain('1. 继续催')
+    expect(long.attention).toContain('3. 升级缺料异常')
+    expect(long.attention!.length).toBeLessThanOrEqual(1000)
+  })
+
+  it('reports a missing optional model and still describes a lead poll', async () => {
+    const { rpc } = fakeRpc()
+    rpc.fieldsGet = async model => {
+      if (model === 'mrp.production') throw new OdooFault(1, "Object mrp.production doesn't exist")
+      return { id: { type: 'integer' } }
+    }
+    expect(await optionalModelStatus(rpc)).toEqual(['mrp.production'])
+    expect(pollHealthDetail({ primed: true, read: 0, unreadable: 0, afterId: 4 }, ['mrp.production']))
+      .toBe('cursor at 4; waiting for new activities on crm.lead, mrp.production and sale.order; mrp.production not installed; crm.lead activities still poll')
+    rpc.fieldsGet = async () => { throw new Error('connection reset') }
+    await expect(optionalModelStatus(rpc)).rejects.toThrow('connection reset')
+    expect(modelUnavailable(new OdooFault(1, 'Record does not exist or has been deleted.'))).toBe(false)
+    expect(odooRecordGone(new OdooFault(1, "Object mrp.production doesn't exist"))).toBe(false)
   })
 })
 

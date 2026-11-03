@@ -95,21 +95,22 @@ Odoo implements the contract with XML-RPC (`authenticate` on `/xmlrpc/2/common`,
 
 | Contract | Odoo V0 |
 | --- | --- |
-| Work assigned to the agent | `mail.activity` `search_read`. Domain from `activityDomain`: `id` greater than the cursor, `res_model` = `crm.lead`, `user_id` = the authenticated uid. Fields: `id`, `res_model`, `res_id`, `summary`, `note`, `user_id`, `create_uid`, `create_date` |
+| Work assigned to the agent | `mail.activity` `search_read`. Domain from `activityDomain`: `id` greater than the cursor, `res_model` in `crm.lead`, `mrp.production`, `sale.order`, `user_id` = the authenticated uid. Fields: `id`, `res_model`, `res_id`, `summary`, `note`, `user_id`, `create_uid`, `create_date`. A missing manufacturing or sales model is a health note; lead activities still poll. Production progress is `docs/011-sop-production-progress.md`. |
 | Drop the agent's own items | `odooTrigger` returns nothing when `create_uid` is the agent uid |
 | Trigger id | `key('odoo', 'activity', activity id)`. The raw id is `meta.activityId` |
 | Summary and note | `summary` and `note`, markup stripped, joined into `text` |
 | Assignee | `user_id`. `addressed` is `direct` when it is the agent |
 | Requester | `create_uid` as `actor.id` |
-| Related object | `res_model` and `res_id`. Thread id `crm.lead:<res_id>`. Channel address `{ model, res_id }` |
+| Related object | `res_model` and `res_id`. Thread id `<res_model>:<res_id>` (`crm.lead:<id>`, `mrp.production:<id>` or `sale.order:<id>`). Channel address `{ model, res_id }` |
 | Created | `create_date`, read as UTC by `odooTime` |
 | Cursor | `KV.odoo.activity` (`odoo-activity-cursor`), `{ afterId }`. `pollActivities` primes it on the first call |
 | Lead snapshot | `odoo_search_read` calls `search_read` on that Ticket's `crm.lead`. Fields in `READ_FIELDS`: `id`, `name`, `type`, `partner_id`, `street`, `city`, `website`, `phone`, `email_from`, `contact_name`, `partner_name`, `function`, `description` |
+| Production snapshot | On an `mrp.production` or `sale.order` Ticket, `odoo_search_read` reads `MRP_READ_FIELDS` or `SALE_READ_FIELDS` after `fields_get`, and `classifyProduction` sets `progress`. There is no `odoo_write` on those models. See `docs/011-sop-production-progress.md`. |
 | Thread context | `odooThreadContext` reads `mail.message` on the lead |
 | Channel note | `sendOdoo` / `postOdooNote`. Search `mail.message` whose body contains `dsh-superagent:<outbound id>`. Otherwise `message_post` with `message_type` `comment`, `subtype_xmlid` `mail.mt_note` |
 | Worker result note | `odoo_message_post`, the same `message_post`, without the outbox marker |
 | Whitelist write | `odoo_write` calls `write` on `WRITE_FIELDS` only: `phone`, `email_from`, `contact_name`, `partner_name`, `function`, `description`. Stage, owner and revenue are absent |
-| Policy | `odooKind.policy.allowed`: Odoo user ids as text. An activity is an explicit request when one of those users assigns it to the agent on a `crm.lead` |
+| Policy | `odooKind.policy.allowed`: Odoo user ids as text. An activity is an explicit request when one of those users assigns it to the agent on a `crm.lead`, `mrp.production` or `sale.order` |
 | Credentials | `ODOO_URL`, `ODOO_DB`, `ODOO_USER`, `ODOO_PASSWORD` via `odooEnv` |
 
 `scripts/odoo-e2e.ts` runs poll, Ticket and the three tools against a live Odoo. A cold poll only records the cursor, so the script takes `--after-id`.
@@ -134,7 +135,7 @@ Later companion work uses this same read and write surface. The fields below are
 
 | Later capability | Extension, when that capability is built |
 | --- | --- |
-| Production progress | Read fields on the sales order or manufacturing order: state, quantities and dates the chase needs. Still one related record per Ticket |
+| Production progress | Started for Odoo in `docs/011-sop-production-progress.md`: read state, quantities and dates on `mrp.production` and `sale.order`, and post an internal chase note. Still one related record per Ticket. Date changes stay with a person |
 | Document cross-check | Read-only document or attachment ids on that record |
 | Shipping notice draft | A draft the Channel or a tool can store as an internal note. Sending the formal notice stays with a person |
 

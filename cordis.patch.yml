@@ -10,7 +10,7 @@
     - id: dsh-superagent-feishu
       name: dsh-superagent/feishu-watch
       disabled: true
-    # Optional Odoo Source; polls mail.activity on crm.lead. Credentials are ODOO_URL, ODOO_DB, ODOO_USER and ODOO_PASSWORD.
+    # Optional Odoo Source; polls mail.activity on crm.lead, mrp.production and sale.order. Credentials are ODOO_URL, ODOO_DB, ODOO_USER and ODOO_PASSWORD.
     - id: dsh-superagent-odoo
       name: dsh-superagent/odoo-watch
       disabled: true
