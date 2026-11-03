@@ -55,4 +55,8 @@ export const KV = {
   feishu: { chats: record<Record<string, boolean>>('feishu-chats'), history: family<string, [chat: string]>('feishu-history:'),
     topics: family<Record<string, string>, [chat: string]>('feishu-history-threads:'),
     seen: family<string[], [thread: string]>('thread-seen:'), initialized: family<boolean, [thread: string]>('thread-initialized:') },
+  /**
+   * Odoo Source: the highest `mail.activity` id already considered. The first poll stores the current maximum and emits nothing.
+   */
+  odoo: { activity: record<{ afterId: number }>('odoo-activity-cursor') },
 }

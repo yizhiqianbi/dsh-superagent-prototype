@@ -77,3 +77,5 @@ Send one message, under 300 words: what will be installed, the accounts and CLIs
 - How to try it: from an account on the allowed list, comment `@<agent login> <request>` on an issue in the repository. A Ticket appears on the overview within about a minute.
 - Three rules for the operator, from the Responsibility section of `docs/000-philosophy.md`: start narrow, tune for less noise, own what the agent says.
 - Where to read more: the numbered documents in `docs/`, in order.
+
+Odoo CRM activities are optional and are not part of the questions above. When the operator wants them, follow [docs/009-odoo.md](docs/009-odoo.md).
