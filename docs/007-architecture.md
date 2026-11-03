@@ -375,11 +375,12 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/sources/feishu-read.ts` | The `feishu/` reads of a Trigger's message, its root, parent and topic, and `feishuThreadContext`, which gives them to assessments with their images |
 | `src/sources/admission-context.ts` | The bounded window an assessment starts from: the first pages of a Trigger's Thread, read through its kind, and the messages around the Trigger |
 | `src/sources/feishu-image.ts` | Reads a Feishu message's image as an attachment for the assessing Session |
-| `src/sources/odoo.ts` | The Odoo kind and plugin entry, exported as `./odoo-watch`: a poll of new `mail.activity` rows on `crm.lead` |
-| `src/sources/odoo-trigger.ts` | One `mail.activity` as a Trigger, and the lead field whitelist |
-| `src/sources/odoo-channel.ts` | The Odoo Channel: an internal note on the lead, `sent` or `gone` |
-| `src/sources/odoo-read.ts` | `odooThreadContext`: the activity and pages of the lead's chatter |
-| `src/sources/odoo-rpc.ts` | The XML-RPC client: authenticate, `search_read`, `write` and `message_post` |
+| `src/sources/odoo.ts` | The Odoo kind and plugin entry, exported as `./odoo-watch`: a poll of new `mail.activity` rows on `crm.lead`, `mrp.production` and `sale.order` |
+| `src/sources/odoo-trigger.ts` | One `mail.activity` as a Trigger, the lead field whitelist, and the manufacturing and sales snapshot fields |
+| `src/sources/odoo-progress.ts` | The production-progress classification and the Attention question it gives the worker |
+| `src/sources/odoo-channel.ts` | The Odoo Channel: an internal note on the related record, `sent` or `gone` |
+| `src/sources/odoo-read.ts` | `odooThreadContext`: the activity and pages of that record's chatter |
+| `src/sources/odoo-rpc.ts` | The XML-RPC client: authenticate, `search_read`, `fields_get`, `write`, `message_post` and `create` |
 | `src/sources/odoo-xml.ts` | The XML-RPC codec those calls use |
 | `src/client/index.tsx` | The client plugin entry: the sidebar entry, the main panel and the page in DeepSeek Harness's Plugin Manager |
 | `src/client/app.tsx` | The panel: header, search, glossary, tabs and the page of the current route |

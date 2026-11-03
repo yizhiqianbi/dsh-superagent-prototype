@@ -1,9 +1,9 @@
-/** Chatter of the lead an activity is on, for an assessment's thread window. */
+/** Chatter of the record an activity is on, for an assessment's thread window. */
 import type { Commands } from '../infra/commands.ts'
 import type { Trigger } from '../core/index.ts'
 import type { ContextMessage, ContextPart, ThreadContext } from './kind.ts'
 import { odooRpc } from './odoo-rpc.ts'
-import { ODOO_MODEL, odooTime } from './odoo-trigger.ts'
+import { isRecordModel, odooTime } from './odoo-trigger.ts'
 
 const PAGE = 20
 
@@ -29,26 +29,27 @@ function activityMessage(trigger: Trigger): ContextMessage {
   return { id: `activity:${String(trigger.meta.activityId ?? '')}`, from: trigger.actor.id, at: trigger.at, text: trigger.text }
 }
 
-async function chatter(resId: number, cursor: string | undefined, limit: number): Promise<ContextMessage[]> {
-  const domain: unknown[] = [['model', '=', ODOO_MODEL], ['res_id', '=', resId]]
+async function chatter(model: string, resId: number, cursor: string | undefined, limit: number): Promise<ContextMessage[]> {
+  const domain: unknown[] = [['model', '=', model], ['res_id', '=', resId]]
   if (cursor) domain.push(['id', '<', Number(cursor)])
   const rows = await odooRpc().searchRead('mail.message', domain, { fields: ['id', 'author_id', 'date', 'body'], limit, order: 'id desc' })
   return rows.flatMap(row => { const item = message(row); return item ? [item] : [] })
 }
 
-/** Thread context of a lead: the activity, then chatter pages of 20, newest first. `parent` has no separate message. */
+/** Thread context of the related record: the activity, then chatter pages of 20, newest first. `parent` has no separate message. */
 export const odooThreadContext: ThreadContext<Record<string, unknown>> = {
   messageId: trigger => `activity:${String(trigger.meta.activityId ?? '')}`,
   async read(_commands: Commands, trigger: Trigger, part, cursor, _config: Record<string, unknown>): Promise<ContextPart> {
+    const model = typeof trigger.meta.model === 'string' ? trigger.meta.model : ''
     const resId = Number(trigger.meta.resId)
-    if (trigger.meta.model !== ODOO_MODEL || !Number.isInteger(resId) || resId <= 0) throw new Error('Missing Odoo lead')
+    if (!isRecordModel(model) || !Number.isInteger(resId) || resId <= 0) throw new Error('Missing Odoo record')
     if (part === 'parent') return { messages: [], body: { messages: [] } }
     if (part === 'root') {
-      const messages = await chatter(resId, undefined, 1)
+      const messages = await chatter(model, resId, undefined, 1)
       return { messages, body: { messages } }
     }
     if (part === 'thread') {
-      const page = await chatter(resId, cursor, PAGE)
+      const page = await chatter(model, resId, cursor, PAGE)
       const messages = cursor ? page : [activityMessage(trigger), ...page]
       const last = page[page.length - 1]
       const next = page.length === PAGE && last ? last.id : undefined

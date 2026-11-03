@@ -1,4 +1,4 @@
-/** Odoo source kind: poll `mail.activity` on `crm.lead` and post notes back on the lead. */
+/** Odoo source kind: poll `mail.activity` on a lead, manufacturing order or sales order, and post notes back on that record. */
 import type { Context } from '@deepseek-ai/cordis'
 import { z } from 'zod'
 import { threadKey } from '../core/index.ts'
@@ -7,8 +7,8 @@ import { health, sourceContext, type SourceContext } from './host.ts'
 import type { SourceKind } from './kind.ts'
 import { odooLink, sendOdoo } from './odoo-channel.ts'
 import { odooThreadContext } from './odoo-read.ts'
-import { ODOO_CREDENTIALS, odooEnv, odooRpc, type OdooRpc } from './odoo-rpc.ts'
-import { ActivitySchema, ODOO_MODEL, SOURCE, activityDomain, leadThreadId, odooTrigger } from './odoo-trigger.ts'
+import { ODOO_CREDENTIALS, modelUnavailable, odooEnv, odooRpc, type OdooRpc } from './odoo-rpc.ts'
+import { ActivitySchema, OPTIONAL_MODELS, SOURCE, activityDomain, isRecordModel, recordThread, odooTrigger } from './odoo-trigger.ts'
 import { pause } from './poll.ts'
 
 const PAGE = 40
@@ -24,8 +24,8 @@ export const odooKind: SourceKind<OdooConfig> = {
   kind: SOURCE,
   title: { zh: 'Odoo', en: 'Odoo' },
   description: {
-    zh: '轮询指派给智能体的 Odoo 用户、且挂在 crm.lead 上的新活动。连接使用环境变量 ODOO_URL、ODOO_DB、ODOO_USER、ODOO_PASSWORD，不写进设置。',
-    en: 'Polls new activities on crm.lead assigned to the agent\'s Odoo user. The connection is ODOO_URL, ODOO_DB, ODOO_USER and ODOO_PASSWORD, which are not stored in settings.',
+    zh: '轮询指派给智能体的 Odoo 用户、且挂在 crm.lead、mrp.production 或 sale.order 上的新活动。连接使用环境变量 ODOO_URL、ODOO_DB、ODOO_USER、ODOO_PASSWORD，不写进设置。未安装制造或销售模块时只少那条路径，线索仍轮询。',
+    en: 'Polls new activities on crm.lead, mrp.production or sale.order assigned to the agent\'s Odoo user. The connection is ODOO_URL, ODOO_DB, ODOO_USER and ODOO_PASSWORD, which are not stored in settings. A missing manufacturing or sales model drops that path only; leads still poll.',
   },
   schema: OdooConfigSchema,
   fields: [
@@ -36,17 +36,20 @@ export const odooKind: SourceKind<OdooConfig> = {
   ],
   health: ['odoo'],
   scope({ meta }) {
-    return meta.model === ODOO_MODEL ? { listened: true, observed: false, row: ODOO_MODEL } : { listened: false, reason: 'model_not_allowed' }
+    return typeof meta.model === 'string' && isRecordModel(meta.model)
+      ? { listened: true, observed: false, row: meta.model } : { listened: false, reason: 'model_not_allowed' }
   },
   channel: {
-    allowed: address => address.model === ODOO_MODEL && /^[1-9]\d*$/.test(address.res_id ?? ''),
+    allowed: address => typeof address.model === 'string' && isRecordModel(address.model) && /^[1-9]\d*$/.test(address.res_id ?? ''),
     send: sendOdoo,
     link: odooLink,
   },
   threadContext: odooThreadContext,
   find: query => {
-    const id = /(?:crm\.lead[/:]|model=crm\.lead&id=)(\d+)/i.exec(query)?.[1]
-    return { threads: id ? [`${SOURCE}:${leadThreadId(Number(id))}`] : [], terms: [] }
+    const labeled = /(crm\.lead|mrp\.production|sale\.order)[/:](\d+)/i.exec(query)
+    const queried = /model=(crm\.lead|mrp\.production|sale\.order)&id=(\d+)/i.exec(query)
+    const match = labeled ?? queried
+    return { threads: match ? [`${SOURCE}:${match[1]!.toLowerCase()}:${match[2]}`] : [], terms: [] }
   },
   policy: {
     schema: z.object({
@@ -60,9 +63,15 @@ export const odooKind: SourceKind<OdooConfig> = {
         { key: 'id', type: 'text', label: { zh: '用户 id', en: 'User id' }, pattern: '[1-9][0-9]*' },
         { key: 'name', type: 'text', label: { zh: '名字', en: 'Name' }, optional: true },
       ] }],
-    explicit: { zh: '名单里的用户把 crm.lead 上的活动指派给智能体的 Odoo 用户。', en: 'A user on the list assigns an activity on a crm.lead to the agent\'s Odoo user.' },
-    rows: () => [{ id: ODOO_MODEL, label: { zh: 'CRM 线索', en: 'CRM leads' }, note: { zh: '仅指派给智能体的活动', en: 'Activities assigned to the agent' },
-      cells: { listedUnaddressed: false, unlistedAddressed: true, unlistedUnaddressed: false } }],
+    explicit: { zh: '名单里的用户把 crm.lead、mrp.production 或 sale.order 上的活动指派给智能体的 Odoo 用户。', en: 'A user on the list assigns an activity on a crm.lead, mrp.production or sale.order to the agent\'s Odoo user.' },
+    rows: () => [
+      { id: 'crm.lead', label: { zh: 'CRM 线索', en: 'CRM leads' }, note: { zh: '仅指派给智能体的活动', en: 'Activities assigned to the agent' },
+        cells: { listedUnaddressed: false, unlistedAddressed: true, unlistedUnaddressed: false } },
+      { id: 'mrp.production', label: { zh: '制造订单', en: 'Manufacturing orders' }, note: { zh: '仅指派给智能体的活动', en: 'Activities assigned to the agent' },
+        cells: { listedUnaddressed: false, unlistedAddressed: true, unlistedUnaddressed: false } },
+      { id: 'sale.order', label: { zh: '销售订单', en: 'Sales orders' }, note: { zh: '仅指派给智能体的活动', en: 'Activities assigned to the agent' },
+        cells: { listedUnaddressed: false, unlistedAddressed: true, unlistedUnaddressed: false } },
+    ],
   },
   environment: {
     variables: [
@@ -94,6 +103,31 @@ export function apply(ctx: Context): void {
   })
 }
 
+/**
+ * Optional models that are not installed. A fault that is not a missing model is thrown, so a network
+ * failure is not reported as "manufacturing is absent". The caller may ignore that throw: the activity poll already succeeded.
+ */
+export async function optionalModelStatus(rpc: OdooRpc, signal?: AbortSignal): Promise<string[]> {
+  const missing: string[] = []
+  for (const model of OPTIONAL_MODELS) {
+    try {
+      await rpc.fieldsGet(model, signal)
+    } catch (error) {
+      if (!modelUnavailable(error)) throw error
+      missing.push(model)
+    }
+  }
+  return missing
+}
+
+/** Health detail for one poll. A missing optional model is a note; it does not change the cursor or the lead path. */
+export function pollHealthDetail(round: { primed: boolean; read: number; unreadable: number; afterId: number }, missing: readonly string[]): string {
+  const gap = missing.length ? `; ${missing.join(', ')} not installed; crm.lead activities still poll` : ''
+  return round.primed
+    ? `cursor at ${round.afterId}; waiting for new activities on crm.lead, mrp.production and sale.order${gap}`
+    : `${round.read} activities, ${round.unreadable} unreadable${gap}`
+}
+
 /** Read activities after the cursor. The first call records the current maximum and emits nothing. */
 export async function pollActivities(ctx: SourceContext, rpc: OdooRpc, signal: AbortSignal): Promise<{ read: number; unreadable: number; primed: boolean; afterId: number }> {
   const base = odooEnv()?.url ?? ''
@@ -121,11 +155,11 @@ export async function pollActivities(ctx: SourceContext, rpc: OdooRpc, signal: A
       const trigger = odooTrigger(parsed.data, agentUid, base)
       if (trigger) {
         await ctx.receive(trigger)
-        const lead = String(parsed.data.res_id)
+        const described = recordThread(parsed.data.res_model, parsed.data.res_id)
         ctx.threads.describe(threadKey(trigger.threads[0]!), {
-          label: `Lead ${lead}`,
+          label: described.label,
           ...(trigger.url ? { url: trigger.url } : {}),
-          facts: { lead: { label: { zh: '线索', en: 'Lead' }, value: lead }, activity: { value: String(parsed.data.id) } },
+          facts: { [described.fact]: { label: described.factLabel, value: String(parsed.data.res_id) }, activity: { value: String(parsed.data.id) } },
         })
       }
       afterId = id
@@ -146,11 +180,12 @@ async function watch(ctx: SourceContext, signal: AbortSignal): Promise<void> {
       if (!config) ctx.report('odoo', health('paused', 'sourceOff'))
       else if (!odooEnv()) ctx.report('odoo', { state: 'error', detail: ODOO_CREDENTIALS })
       else {
-        const round = await pollActivities(ctx, odooRpc(), signal)
+        const rpc = odooRpc()
+        const round = await pollActivities(ctx, rpc, signal)
+        let missing: string[] = []
+        try { missing = await optionalModelStatus(rpc, signal) } catch { missing = [] }
         failures = 0
-        const detail = round.primed ? `cursor at ${round.afterId}; waiting for new crm.lead activities`
-          : `${round.read} activities, ${round.unreadable} unreadable`
-        ctx.report('odoo', { state: 'ready', detail, at: new Date().toISOString() })
+        ctx.report('odoo', { state: 'ready', detail: pollHealthDetail(round, missing), at: new Date().toISOString() })
       }
     } catch (error) {
       failures += 1

@@ -14,12 +14,14 @@ export interface XmlRpcTransport {
   call(path: '/xmlrpc/2/common' | '/xmlrpc/2/object', method: string, params: readonly unknown[], signal?: AbortSignal): Promise<unknown>
 }
 
-/** The calls the Source and the worker tools share. */
+/** The calls the Source and the worker tools share. `create` is for the end-to-end script, not a worker tool. */
 export interface OdooRpc {
   uid(signal?: AbortSignal): Promise<number>
   searchRead(model: string, domain: readonly unknown[], options: { fields: readonly string[]; limit?: number; order?: string }, signal?: AbortSignal): Promise<Record<string, unknown>[]>
+  fieldsGet(model: string, signal?: AbortSignal): Promise<Record<string, unknown>>
   write(model: string, ids: readonly number[], values: Record<string, unknown>, signal?: AbortSignal): Promise<boolean>
   messagePost(model: string, id: number, body: string, signal?: AbortSignal): Promise<number>
+  create(model: string, values: Record<string, unknown>, signal?: AbortSignal): Promise<number>
 }
 
 const DEFAULT_URL = 'http://127.0.0.1:8069'
@@ -89,10 +91,23 @@ export class OdooClient implements OdooRpc {
     return rows.filter((row): row is Record<string, unknown> => !!row && typeof row === 'object' && !Array.isArray(row))
   }
 
+  async fieldsGet(model: string, signal?: AbortSignal): Promise<Record<string, unknown>> {
+    const fields = await this.execute(model, 'fields_get', [], { attributes: ['type'] }, signal)
+    if (!fields || typeof fields !== 'object' || Array.isArray(fields)) throw new Error(`Odoo fields_get on ${model} returned no map`)
+    return fields as Record<string, unknown>
+  }
+
   async write(model: string, ids: readonly number[], values: Record<string, unknown>, signal?: AbortSignal): Promise<boolean> {
     const wrote = await this.execute(model, 'write', [ids, values], {}, signal)
     if (wrote !== true) throw new Error(`Odoo write on ${model} was refused`)
     return true
+  }
+
+  async create(model: string, values: Record<string, unknown>, signal?: AbortSignal): Promise<number> {
+    const created = await this.execute(model, 'create', [values], {}, signal)
+    const id = typeof created === 'number' ? created : Array.isArray(created) && typeof created[0] === 'number' ? created[0] : undefined
+    if (id === undefined || !Number.isInteger(id) || id <= 0) throw new Error(`Odoo create on ${model} returned no id`)
+    return id
   }
 
   async messagePost(model: string, id: number, body: string, signal?: AbortSignal): Promise<number> {
@@ -116,4 +131,10 @@ export class OdooClient implements OdooRpc {
 /** True when Odoo says the record can never be written again. Other faults are retried. */
 export function odooRecordGone(error: unknown): boolean {
   return error instanceof OdooFault && /does not exist|has been deleted|MissingError/i.test(error.message)
+}
+
+/** True when the model is not installed. A deleted record is not this: that fault names the record, not the model. */
+export function modelUnavailable(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return /unknown model|doesn't exist|KeyError:|does not exist in the registry|Object .+ doesn't exist/i.test(message)
 }
