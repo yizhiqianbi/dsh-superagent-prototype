@@ -96,7 +96,10 @@ export class OdooClient implements OdooRpc {
   }
 
   async messagePost(model: string, id: number, body: string, signal?: AbortSignal): Promise<number> {
-    const posted = await this.execute(model, 'message_post', [[id]], { body, message_type: 'comment', subtype_xmlid: 'mail.mt_note' }, signal)
+    // Odoo 20 escapes a plain string. body_is_html keeps the note markup produced for the chatter.
+    const posted = await this.execute(model, 'message_post', [[id]], {
+      body, message_type: 'comment', subtype_xmlid: 'mail.mt_note', body_is_html: true,
+    }, signal)
     // Odoo 20 returns the new message as a one-element list of ids. Earlier versions return the id.
     const messageId = typeof posted === 'number' ? posted : Array.isArray(posted) && typeof posted[0] === 'number' ? posted[0] : undefined
     if (messageId === undefined || !Number.isInteger(messageId)) throw new Error('Odoo message_post returned no message id')

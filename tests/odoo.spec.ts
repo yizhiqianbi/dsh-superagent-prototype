@@ -219,8 +219,10 @@ describe('odoo xml-rpc', () => {
     } }
     const client = new OdooClient(transport, { url: 'http://127.0.0.1:8069', db: 'odoo', user: 'agent', password: 'secret' })
     expect(await client.searchRead('crm.lead', [['id', '=', 15]], { fields: ['phone'], limit: 1 })).toEqual([{ id: 15, phone: '555' }])
-    transport.call = async (_path, method) => method === 'authenticate' ? 3 : [90]
+    const posted: { method: string; params: readonly unknown[] }[] = []
+    transport.call = async (_path, method, params) => { posted.push({ method, params }); return method === 'authenticate' ? 3 : [90] }
     expect(await client.messagePost('crm.lead', 15, '<p>Noted</p>')).toBe(90)
+    expect(posted[0]?.params[6]).toMatchObject({ body: '<p>Noted</p>', body_is_html: true, subtype_xmlid: 'mail.mt_note' })
     await client.uid()
     expect(calls.map(call => call.method)).toEqual(['authenticate', 'execute_kw'])
     expect(calls[1]!.params).toEqual(['odoo', 3, 'secret', 'crm.lead', 'search_read', [[['id', '=', 15]]], { fields: ['phone'], limit: 1 }])

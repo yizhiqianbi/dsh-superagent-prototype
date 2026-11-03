@@ -38,4 +38,6 @@ Under **Eval → On each Source → Odoo**, list the Odoo user ids (integers, as
 
 A reply from the Channel (an acknowledgement) is also an internal note on the same lead. Each outgoing message id is written into the note so a retry does not post it twice.
 
+`scripts/odoo-e2e.ts` runs that path against a live Odoo without starting Harness. A cold poll only records the current highest activity id, so pass `--after-id` as the cursor already held when the activity was created. Credentials stay in the environment and are not printed.
+
 The activity id is the Trigger id. Editing the same activity does not open another Ticket. A later activity on the same lead joins that lead's Thread.
