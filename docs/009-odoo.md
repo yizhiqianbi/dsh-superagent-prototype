@@ -2,6 +2,8 @@
 
 V0 listens to Odoo `mail.activity` rows on `crm.lead` and posts the worker's note back on that lead. It does not patch Odoo. The connection is XML-RPC and the credentials stay in the environment.
 
+This Source is the first implementation of the [ERP adapter contract](010-erp-adapter.md). A later ERP plugs in as its own Source and Channel. Policy, Tickets and the Executor stay.
+
 ## Environment
 
 Set these before enabling the plugin. Nothing here is stored in settings.
