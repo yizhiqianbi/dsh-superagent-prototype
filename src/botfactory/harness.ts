@@ -4,7 +4,7 @@ import { checkedImText } from '../infra/text.ts'
 import type { Settings } from '../policy.ts'
 import { SOURCE as FEISHU } from '../sources/feishu-trigger.ts'
 import { SOURCE as WECOM } from '../sources/wecom-trigger.ts'
-import { chatConflict, factoryStart, factoryStop, identityId } from './grill.ts'
+import { chatConflict, factoryStart, factoryStop, hangNotice, identityId } from './grill.ts'
 import { BusinessIdentitySchema, type BusinessIdentity, type FactoryDraft } from './schema.ts'
 import { openFactory, type FactoryLibrary } from './store.ts'
 
@@ -68,7 +68,7 @@ export function settle(raw: unknown, existing: readonly BusinessIdentity[]): { i
 }
 
 export interface BotfatherCall { text?: string; identity?: unknown; close?: boolean }
-export interface BotfatherResult { say?: string; wired?: BusinessIdentity; closed?: boolean; error?: string }
+export interface BotfatherResult { say?: string; wired?: BusinessIdentity; hang?: string; closed?: boolean; error?: string }
 
 /** Speaks, writes a settled template, or closes the conversation. A template that does not parse is not written. */
 export function applyBotfather(library: FactoryLibrary, key: string, call: BotfatherCall): BotfatherResult {
@@ -79,9 +79,11 @@ export function applyBotfather(library: FactoryLibrary, key: string, call: Botfa
     if (typeof said !== 'string') return { error: said.error }
     const settled = settle(call.identity, library.identities())
     if ('error' in settled) return { error: settled.error }
+    const hang = notice(settled.identity)
+    if (typeof hang !== 'string') return { error: hang.error }
     library.saveIdentity(settled.identity)
     library.saveDraft(key, null)
-    return { say: said, wired: settled.identity }
+    return { say: said, wired: settled.identity, hang }
   }
   if (call.close) {
     if (text) {
@@ -103,6 +105,10 @@ export function applyBotfather(library: FactoryLibrary, key: string, call: Botfa
 
 function speech(text: string): string | { error: string } {
   try { return checkedImText(text) } catch (error) { return { error: error instanceof Error ? error.message : String(error) } }
+}
+
+function notice(identity: BusinessIdentity): string | { error: string } {
+  try { return hangNotice(identity) } catch (error) { return { error: error instanceof Error ? error.message : String(error) } }
 }
 
 /** The identity directory of the trigger's own Source, the one its draft was saved beside. */

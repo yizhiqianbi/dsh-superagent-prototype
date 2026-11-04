@@ -2,7 +2,6 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { z } from 'zod'
 import { FeishuBotSchema } from '../deployment.ts'
-import { identityFeishuChats, unionChats } from '../botfactory/store.ts'
 import { feishuLink, sendFeishu } from './feishu-channel.ts'
 import { feishuThreadContext } from './feishu-read.ts'
 import { refreshChatNames, runFeishu } from './feishu-loops.ts'
@@ -48,9 +47,9 @@ export const feishuKind: SourceKind<FeishuConfig> = {
     { key: 'otherChats', type: 'select', label: { zh: '其他群', en: 'Other chats' }, options: [{ value: 'none', label: { zh: '不接收', en: 'Not received' } }, { value: 'mentions', label: { zh: '仅 @', en: '@ only' } }],
       hint: { zh: '机器人已加入、但没列在上面的群。“仅 @”接收那里 @ 机器人的消息；谁的消息能发起工作看策略里的准入。', en: 'Chats the bot has joined that are not listed above. "@ only" receives messages there that mention the bot; whose messages may originate work is the Policy\'s admission.' } },
     { key: 'directMessages', type: 'switch', label: { zh: '接收私聊', en: 'Direct messages' },
-      hint: { zh: 'BotFather 在飞书私聊里开业务线，和企业微信用同一份身份。关掉就收不到私聊。', en: 'BotFather starts business lines in Feishu direct messages, using the same identity as WeCom. Off means direct messages are not received.' } },
-    { key: 'identitiesDir', type: 'text', advanced: true, label: { zh: '业务线目录', en: 'Business-line directory' },
-      hint: { zh: '和企业微信共用的 BotFather 身份目录。oc_ 群从这里并进接收列表。留空则不读。', en: 'BotFather identity directory shared with WeCom. oc_ chats are added to the receiving list. Empty reads none.' } },
+      hint: { zh: 'BotFather 也可以在飞书私聊里配角色。企业微信的马甲要另建机器人再挂。关掉就收不到私聊。', en: 'BotFather can settle a role in a Feishu direct message too. A WeCom mask is a new bot the operator creates. Off means direct messages are not received.' } },
+    { key: 'identitiesDir', type: 'text', advanced: true, label: { zh: '角色目录', en: 'Role directory' },
+      hint: { zh: 'BotFather 写角色的目录，和私聊草稿在一起。角色里的群不会自动并进这个飞书机器人的接收列表。', en: 'Directory where BotFather writes roles, beside the direct-message drafts. Groups in a role are not added to this Feishu bot\'s receiving list.' } },
     { key: 'readPageSize', type: 'number', advanced: true, min: 1, max: 50, label: { zh: '每页消息数', en: 'Messages per page' }, hint: { zh: '智能体读取线程和群历史时，每页的消息数。', en: 'Messages per page when agents read Threads and chat history.' } },
     { key: 'linkTimeoutMs', type: 'number', advanced: true, min: 1, max: 90000, label: { zh: '原消息链接的查询时限 / 毫秒', en: 'Original message link time limit / ms' },
       hint: { zh: '查询原消息链接最多等待的时间；超时后智能体改为直接读取原消息。', en: 'How long to wait for an original message\'s link; after that, agents read the message itself.' } },
@@ -58,7 +57,7 @@ export const feishuKind: SourceKind<FeishuConfig> = {
   health: ['feishu', 'history'],
   scope({ meta }, config) {
     if (meta.direct === true) return config.directMessages ? { listened: true, observed: false, row: 'direct' } : { listened: false, reason: 'direct_messages_not_allowed' }
-    const chat = unionChats(config.chats, identityFeishuChats(config.identitiesDir)).find(item => item.chatId === meta.chatId)
+    const chat = config.chats.find(item => item.chatId === meta.chatId)
     if (chat) return { listened: true, observed: chat.listen === 'all', row: chat.chatId }
     return config.otherChats === 'mentions' ? { listened: true, observed: false, row: 'other' } : { listened: false, reason: 'chat_not_allowed' }
   },
@@ -95,7 +94,7 @@ export const feishuKind: SourceKind<FeishuConfig> = {
     rows(stored) {
       const config = FeishuConfigSchema.parse(stored)
       const mentions = { zh: '仅 @', en: '@ only' }
-      const chats = unionChats(config.chats, identityFeishuChats(config.identitiesDir))
+      const chats = config.chats
       return [
         ...chats.map(chat => ({ id: chat.chatId, label: chat.name || chat.chatId, note: chat.listen === 'all' ? { zh: '全部消息', en: 'All' } : mentions,
           cells: { listedUnaddressed: chat.listen === 'all', unlistedAddressed: true, unlistedUnaddressed: chat.listen === 'all' } })),

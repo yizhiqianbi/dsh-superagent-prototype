@@ -1,8 +1,10 @@
 # 010 BotFather
 
-BotFather is a direct-message conversation on the one WeCom smart-bot long connection, and on the Feishu bot. The session thinks about a business line with the operator, asks what is still missing, and writes an identity file once the template is settled. It wires that line onto the bot's chats and companion speech. It does not create a WeCom BotID. A second BotID is out of scope. Permissions are deferred: the identity file is not an allow list, and the existing WeCom userid list is left as it is.
+BotFather is a direct-message conversation on a WeCom bot the operator already runs, and the same conversation can run on Feishu. The session thinks about a business, asks what is still missing, and writes a **role package** once the template is settled. 分马甲、自建 BotID、只管 role: each WeCom business is its own 智能机器人. The operator creates that BotID. BotFather does not ask for it, does not write it, and does not create the bot through an API.
 
-The avatar stays the one bot. A business line is a persona, a chat policy, an optional Odoo hook, and a smoke greeting in plain speech.
+The role is not another mask on the bot that held the conversation. Settling it does not copy the role's chats onto that connection, and it does not change that bot's greeting. Permissions are deferred: the identity file is not an allow list, and the existing WeCom userid list is left as it is.
+
+A role is a persona, a chat policy, an optional Odoo hook, a smoke greeting in plain speech, and a hang note.
 
 ## Where identities live
 
@@ -11,11 +13,12 @@ Under the superagent profile (`~/.dsh/profiles/superagent`, or `$DSH_HOME/profil
 | Path | Role |
 | --- | --- |
 | `botfactory/botfather.yml` | The DM route. `route: dm`. `operators` empty means any direct message that opens a business line. A non-empty list is only who may open that conversation |
-| `botfactory/identities/<id>.yml` | One business line, the template |
-| `botfactory/companions/<id>.md` | The speech the companion uses for that line |
+| `botfactory/identities/<id>.yml` | The role: persona, SOP, scope, templates |
+| `botfactory/companions/<id>.md` | How that role speaks, for the bot the operator hangs |
+| `botfactory/roles/<id>.md` | The hang note: what was written, and how to point a new 智能机器人 at it |
 | `botfactory/drafts/<userid>.json` | The open conversation. A Feishu draft is `feishu-<open_id>.json` |
 
-The WeCom Source field `identitiesDir` points at `botfactory/identities`. `$DSH_SUPERAGENT_WECOM_IDENTITIES` is that directory, and empty when nothing is wired. The skill `skills/dsh-superagent-wecom/SKILL.md` tells an operator the same paths.
+The WeCom Source field `identitiesDir` points at `botfactory/identities` so the grill can read and write that package. `$DSH_SUPERAGENT_WECOM_IDENTITIES` is that directory, and empty when no package has been written. It is not a second BotID, and chats named in a role are not added to this connection. The skill `skills/dsh-superagent-wecom/SKILL.md` tells an operator the same paths.
 
 ## Conversation
 
@@ -45,15 +48,17 @@ The file is the template. The session fills it. The host checks it and writes it
 
 Where it speaks is `scope`. A named group is a `wr_` id on WeCom or an `oc_` id on Feishu. Every connected group is `scope.directMessages` plus `scope.otherChats: mentions` — the same `mentions` value a Source uses for other chats. Recording it does not flip the Source switch, the Feishu CLI, or any credential.
 
-Direct messages alone are enough to activate a line on both channels. Wiring does not wait for a group @. WeCom still only pushes group messages that @ the bot. An `oc_` id is added to the Feishu chat list as mentions unless the line says `listen: all`. Direct messages stay on for both Sources, because that is where BotFather talks.
+The scope is what the operator copies onto the new bot. It does not become an admission row on the bot that wrote the role. The userid and open_id lists are untouched. A group another role already owns is refused.
 
-A WeCom chat id becomes a WeCom admission row. An `oc_` id becomes a Feishu admission row. The userid and open_id lists are untouched. A group another line already owns is refused.
+The factory bot keeps its own greeting. On Feishu the host stays quiet except for the factory conversation. While a conversation is open, a later direct message stays in it.
 
-When one line owns the chat, a greeting uses that line's `smoke`. On Feishu the host sends that greeting and stays quiet for other chat. Several lines sharing direct messages keep the shared greeting. While a conversation is open, a later direct message stays in it instead of becoming that greeting.
+## After it settles
+
+The host says, in Chinese, which files it wrote and how to hang them: create a new 智能机器人 in the WeCom admin console, choose the long connection, put that bot's BotID and Secret in its own env or profile (`WECOM_BOT_ID`, `WECOM_BOT_SECRET`), and point that profile at this role. The conversation does not ask for those values. The longer steps are in `botfactory/roles/<id>.md`.
 
 ## Both channels
 
-The same identity file wires both bots. Chat ids other than `oc_` go to WeCom. `oc_` chat ids go to Feishu. `pnpm botfactory-wire` turns on `dsh-superagent-wecom` and `dsh-superagent-feishu`, sets `identitiesDir` on both Sources, and turns direct messages on. It does not change the Feishu CLI or the Feishu other-chats policy. A Feishu draft is stored apart from the WeCom draft. An operator id in `botfather.yml` may be a WeCom userid or a Feishu `ou_` open_id.
+Chat ids other than `oc_` are WeCom chats for the new bot. `oc_` chat ids are Feishu chats recorded on the same role. `pnpm botfactory-wire` turns on `dsh-superagent-wecom` and `dsh-superagent-feishu`, sets `identitiesDir` on both Sources, and turns direct messages on so the grill can run. It does not copy the role's chats onto either Source. It does not change the Feishu CLI or the Feishu other-chats policy. A Feishu draft is stored apart from the WeCom draft. An operator id in `botfather.yml` may be a WeCom userid or a Feishu `ou_` open_id.
 
 ## Wire command
 
@@ -63,7 +68,7 @@ pnpm botfactory-wire --dry-run examples/botfactory/trade-followup.yml
 pnpm botfactory-wire examples/botfactory/trade-followup.yml
 ```
 
-`--init` writes `botfather.yml` if it is missing, turns on `dsh-superagent-wecom` and `dsh-superagent-feishu` in the profile `cordis.patch.yml`, and, when the panel on `127.0.0.1` answers, turns direct messages on and sets `identitiesDir` on both Sources. `--dry-run` validates and prints the smoke line. It does not write files. A real run copies `oc_` chats to Feishu and the other chats to WeCom when that panel answers. If the panel is down, the files are still written; run the command again once the panel is up so each Source stores the directory and its chats. The command never prints `WECOM_BOT_SECRET`.
+`--init` writes `botfather.yml` if it is missing, turns on `dsh-superagent-wecom` and `dsh-superagent-feishu` in the profile `cordis.patch.yml`, and, when the panel on `127.0.0.1` answers, turns direct messages on and sets `identitiesDir` on both Sources. That is the grill, not a new mask. `--dry-run` validates and prints the smoke line and the hang steps. It does not write files. A real run writes the role package. If the panel is down, the files are still written; run the command again once the panel is up so each Source stores the directory. The command names `WECOM_BOT_SECRET` as the variable the operator fills. It never prints that variable's value.
 
 Changing the plugin from disabled to enabled needs one restart. Chat and directory changes do not.
 

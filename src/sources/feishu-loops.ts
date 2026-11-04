@@ -6,7 +6,6 @@ import { z } from 'zod'
 import { threadKey, key, type ReceiveResult, type Thread, type Trigger } from '../core/index.ts'
 import { planCompanion } from '../botfactory/companion.ts'
 import { SAVE_FAILED } from '../botfactory/grill.ts'
-import { pushWecomSettings } from '../botfactory/settings.ts'
 import { openFactory } from '../botfactory/store.ts'
 import { feishuChatLink } from './feishu-channel.ts'
 import type { FeishuBot } from '../deployment.ts'
@@ -57,9 +56,6 @@ function queueFeishuFactory(ctx: SourceContext, trigger: Trigger, result: Receiv
     try { plan.commit() } catch { message = { ...notice, text: SAVE_FAILED } }
   }
   ctx.notify(message)
-  if (plan.wired && identitiesDir && message.text !== SAVE_FAILED) {
-    void pushWecomSettings(identitiesDir, library?.identities() ?? []).catch(() => { /* The identity file is already the listen list. */ })
-  }
 }
 const chatLink = (ctx: SourceContext, chatId: string): string => feishuChatLink(ctx.deployment.feishu?.brand ?? 'feishu', chatId)
 function available(ctx: SourceContext): boolean {

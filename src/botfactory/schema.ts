@@ -1,4 +1,4 @@
-/** One business line on the single WeCom bot, and the DM-only BotFather route that creates lines. */
+/** A role for a new WeCom bot the operator creates, and the DM-only BotFather route that writes that role. */
 import { z } from 'zod'
 import { WRITE_FIELDS } from '../sources/odoo-trigger.ts'
 import { WECOM_ID } from '../sources/wecom-trigger.ts'
@@ -18,7 +18,7 @@ export const GroupSchema = z.object({
   /** Feishu listed chats. Omitted on a WeCom chat. `oc_` ids default to mentions when this is absent. */
   listen: z.enum(['mentions', 'all']).optional(),
 }).strict()
-/** Feishu chat ids in this host. Anything else in `groups` is a WeCom chat on the one bot. */
+/** Feishu chat ids in this host. Anything else in `groups` is a WeCom chat for the new bot, once the operator hangs the role. */
 export const FEISHU_CHAT = /^oc_[a-zA-Z0-9]+$/
 export const FEISHU_OPEN_ID = /^ou_[a-zA-Z0-9]+$/
 export const chatChannel = (chatId: string): 'feishu' | 'wecom' => FEISHU_CHAT.test(chatId) ? 'feishu' : 'wecom'
@@ -47,8 +47,8 @@ const ErpOnSchema = z.object({
 }).strict()
 
 /**
- * A business line on the WeCom bot and the Feishu bot together. `permissions` stays `deferred`: this file does not grant an allow-list.
- * `id` is the template id. `name` is what people call the line. A group is Feishu when its chat id starts with `oc_`, and WeCom otherwise.
+ * A role the operator hangs on a new WeCom bot. `permissions` stays `deferred`: this file does not grant an allow-list, and it does not store a BotID or a Secret.
+ * `id` is the template id. `name` is what people call the role. A group is Feishu when its chat id starts with `oc_`, and WeCom otherwise.
  */
 export const BusinessIdentitySchema = z.object({
   id: z.string().regex(/^[a-z][a-z0-9-]{1,40}$/).refine(id => id !== 'botfather', 'botfather is the factory route, not a business line'),
@@ -67,7 +67,7 @@ export const BusinessIdentitySchema = z.object({
 export type BusinessIdentity = z.infer<typeof BusinessIdentitySchema>
 export type ErpConfig = BusinessIdentity['erp']
 
-/** BotFather is a direct-message route on the existing WeCom bot and the existing Feishu bot. `operators` empty means any DM that shows factory intent. An operator id may be a WeCom userid or a Feishu open_id. */
+/** BotFather is a direct-message route used to write a role. `operators` empty means any DM that shows factory intent. An operator id may be a WeCom userid or a Feishu open_id. The route is not a BotID. */
 export const BotfatherRouteSchema = z.object({
   id: z.literal('botfather'),
   name: z.string().trim().min(1).max(40).default('BotFather'),

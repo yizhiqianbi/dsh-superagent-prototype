@@ -1,4 +1,4 @@
-# BotFather is a direct-message route on the existing WeCom bot. It is not a BotID.
+# BotFather is a direct-message route that writes a role. It is not a BotID. The operator creates the BotID.
 # operators empty: any direct message that opens a business line starts that conversation.
 # A non-empty list only chooses who may open the factory. It is not a permission list for a business line.
 id: botfather

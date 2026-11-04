@@ -389,13 +389,13 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/sources/wecom-read.ts` | `wecomThreadContext`: the triggering message only, because the long connection has no history, plus a picture already stored for it |
 | `src/botfactory/schema.ts` | The business-line identity and the BotFather direct-message route. Permissions stay deferred |
 | `src/botfactory/yaml.ts` | The YAML subset those identity files use |
-| `src/botfactory/grill.ts` | The factory entry, a stop, identity ids, and the companion fragment a wired line leaves |
-| `src/botfactory/harness.ts` | Hands a factory direct message to the session, and writes the template once that session settles it |
-| `src/botfactory/store.ts` | Identity files, the open conversation, and the chats a line adds beside the Source form |
+| `src/botfactory/grill.ts` | The factory entry, a stop, identity ids, the companion fragment, and the hang note for a new bot |
+| `src/botfactory/harness.ts` | Hands a factory direct message to the session, and writes the role once that session settles it |
+| `src/botfactory/store.ts` | The role package (identity, companion, hang note) and the open conversation |
 | `src/botfactory/secrets.ts` | Keeps credential values out of BotFactory files and printed lines |
-| `src/botfactory/settings.ts` | Enables the WeCom plugin in the profile patch and copies chats through the management API |
-| `src/botfactory/companion.ts` | Leaves a factory direct message to the session; otherwise the wired line's greeting |
-| `src/botfactory/wire.ts` | `botfactory-wire`: validates an identity and writes it onto the local profile |
+| `src/botfactory/settings.ts` | Enables the WeCom plugin and records the role directory. It does not copy a role's chats onto the current bot |
+| `src/botfactory/companion.ts` | Leaves a factory direct message to the session. A saved role does not change this bot's greeting |
+| `src/botfactory/wire.ts` | `botfactory-wire`: validates a role and writes the package. It does not create a BotID |
 | `src/client/index.tsx` | The client plugin entry: the sidebar entry, the main panel and the page in DeepSeek Harness's Plugin Manager |
 | `src/client/app.tsx` | The panel: header, search, glossary, tabs and the page of the current route |
 | `src/client/provider.tsx` | What every page reads from its host: copy, calls, navigation, notices, the state poll, and `restart`, which reads the state quickly while dsh-superagent restarts |

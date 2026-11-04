@@ -1,11 +1,11 @@
-/** BotFather's session handoff, identity files, and the dry-run wire onto one WeCom bot. */
+/** BotFather's session handoff, the role package, and the dry-run that does not hang it. */
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { composePrompt, defaultPrompts } from '../src/app/prompts.ts'
 import { planCompanion } from '../src/botfactory/companion.ts'
-import { FACTORY_STOP, ROUTE_BROKEN, smokeFor } from '../src/botfactory/grill.ts'
+import { FACTORY_STOP, ROUTE_BROKEN, hangNotice } from '../src/botfactory/grill.ts'
 import { applyBotfather, factoryHandoff } from '../src/botfactory/harness.ts'
 import { BotfatherRouteSchema, type BusinessIdentity } from '../src/botfactory/schema.ts'
 import { scrub } from '../src/botfactory/secrets.ts'
@@ -13,7 +13,7 @@ import { enableWecomPlugin, mergeFeishuConfig, mergeWecomConfig, webPort } from 
 import { loadIdentities, openFactory, parseIdentityFile } from '../src/botfactory/store.ts'
 import { runBotfactory } from '../src/botfactory/wire.ts'
 import { parseYaml } from '../src/botfactory/yaml.ts'
-import { checkedImText } from '../src/infra/text.ts'
+import { checkedImText, wordCount } from '../src/infra/text.ts'
 import { SettingsSchema } from '../src/policy.ts'
 import { feishuKind } from '../src/sources/feishu.ts'
 import { queueWecomCompanion, wecomKind } from '../src/sources/wecom.ts'
@@ -136,6 +136,10 @@ describe('BotFather session', () => {
     const first = applyBotfather(library, 'boss', { text: '先记着，Odoo 开着。', identity })
     expect(first.say).toBe('先记着，Odoo 开着。')
     expect(first.wired?.id).toBe('trade-followup')
+    expect(first.hang).toContain('智能机器人')
+    expect(first.hang).toContain('不要发在这里')
+    expect(first.hang).not.toMatch(/闸门|呈报/)
+    expect(wordCount(first.hang ?? '')).toBeLessThanOrEqual(100)
     expect(library.draft('boss')).toBeUndefined()
     const said = '这条线是外贸跟单。私聊和外贸跟单群。Odoo 先不接。'
     const second = applyBotfather(library, 'boss', { text: said, identity: { ...identity, erp: { enabled: false } } })
@@ -180,19 +184,27 @@ describe('BotFather session', () => {
     expect(applyBotfather(library, 'boss', {}).error).toMatch(/Say something/)
   })
 
-  it('uses one line\'s smoke for a direct chat and for every connected group', () => {
+  it('keeps a saved role off this bot and tells the operator to hang a new one', () => {
+    const root = temp()
+    const dir = join(root, 'identities')
+    const library = openFactory(dir)
     const identity = example()
-    expect(smokeFor([identity], true, 'anywhere')).toBe(identity.smoke)
-    expect(smokeFor([identity], false, 'wr_trade')).toBe(identity.smoke)
-    expect(smokeFor([identity], false, 'wr_other')).toBeUndefined()
-    const open = { ...identity, scope: { directMessages: true, otherChats: 'mentions' as const, groups: [] } }
-    expect(smokeFor([open], false, 'wr_other')).toBe(identity.smoke)
+    library.saveIdentity(identity)
+    expect(planCompanion(dm('你好'), library)?.text).toBe(WECOM_GREETING)
+    expect(hangNotice({ ...identity, name: '名'.repeat(40) })).toContain('WECOM_BOT_ID')
+    expect(wordCount(hangNotice({ ...identity, name: '名'.repeat(40) }))).toBeLessThanOrEqual(100)
     expect(checkedSpeech(identity.smoke)).toBe(identity.smoke)
+    const role = readFileSync(join(root, 'roles', 'trade-followup.md'), 'utf8')
+    expect(role).toContain('分马甲')
+    expect(role).toContain('只管 role')
+    expect(role).not.toMatch(/WECOM_BOT_SECRET\s*[:=]/)
   })
 
   it('tells only the orchestrator to call botfather', () => {
     expect(composePrompt(defaultPrompts(), 'orchestrator')).toContain('call botfather')
     expect(composePrompt(defaultPrompts(), 'orchestrator')).toContain('Read the image')
+    expect(composePrompt(defaultPrompts(), 'orchestrator')).toContain('new WeCom bot')
+    expect(composePrompt(defaultPrompts(), 'orchestrator')).toContain('Do not ask for a BotID')
     expect(composePrompt(defaultPrompts(), 'worker')).not.toContain('call botfather')
   })
 })
@@ -212,9 +224,12 @@ describe('identity files', () => {
     library.saveIdentity(identity)
     expect(loadIdentities(identities)).toEqual([identity])
     expect(readFileSync(join(dir, 'botfactory', 'companions', 'trade-followup.md'), 'utf8')).toContain('需要你拍板')
+    expect(readFileSync(join(dir, 'botfactory', 'companions', 'trade-followup.md'), 'utf8')).toContain('new WeCom bot')
+    expect(readFileSync(join(dir, 'botfactory', 'roles', 'trade-followup.md'), 'utf8')).toContain('智能机器人')
+    expect(readFileSync(join(identities, 'trade-followup.yml'), 'utf8')).not.toMatch(/botId|WECOM_BOT_SECRET|secret:/i)
     const config = wecomKind.schema.parse({ identitiesDir: identities, chats: [], directMessages: true })
-    expect(wecomKind.scope!({ meta: { chatId: 'wr_trade', direct: false } }, config)).toEqual({ listened: true, observed: false, row: 'wr_trade' })
-    expect(wecomKind.policy!.rows!(config).map(row => row.id)).toContain('wr_trade')
+    expect(wecomKind.scope!({ meta: { chatId: 'wr_trade', direct: false } }, config).listened).toBe(false)
+    expect(wecomKind.policy!.rows!(config).map(row => row.id)).not.toContain('wr_trade')
   })
 
   it('refuses a secret in the identity file', () => {
@@ -230,8 +245,10 @@ describe('botfactory-wire', () => {
     const code = await runBotfactory({ argv: ['--dry-run', EXAMPLE], env: {}, home, log: line => { lines.push(line) } })
     expect(code).toBe(0)
     expect(lines.join('\n')).toContain('在的。跟单、催办、到账确认')
+    expect(lines.join('\n')).toContain('智能机器人')
     expect(lines.join('\n')).toContain('干跑')
-    expect(lines.join('\n')).not.toMatch(/闸门|WECOM_BOT_SECRET/)
+    expect(lines.join('\n')).not.toMatch(/闸门|呈报/)
+    expect(lines.join('\n')).not.toContain('不会新开 BotID')
   })
 
   it('writes the profile fragments and enables the existing WeCom plugin', async () => {
@@ -249,11 +266,13 @@ describe('botfactory-wire', () => {
     expect(lines.join('\n')).toContain('面板没有返回设置')
     expect(enableWecomPlugin('x\n')).toContain('disabled: false')
     expect(webPort(patch)).toBe(3099)
-    expect(mergeWecomConfig({ botId: 'bot-1', secret: 'nope', chats: [] }, '/tmp/identities', loadIdentities(join(profile, 'botfactory', 'identities')))).toMatchObject({
+    expect(readFileSync(join(profile, 'botfactory', 'roles', 'trade-followup.md'), 'utf8')).toContain('WECOM_BOT_ID')
+    expect(mergeWecomConfig({ botId: 'bot-1', secret: 'nope', chats: [{ chatId: 'wr_keep' }] }, '/tmp/identities')).toMatchObject({
       botId: 'bot-1', directMessages: true, identitiesDir: '/tmp/identities',
-      chats: [{ chatId: 'wr_trade', name: '外贸跟单群' }],
+      chats: [{ chatId: 'wr_keep' }],
     })
-    expect(mergeWecomConfig({ secret: 'nope' }, '/tmp/identities', [])).not.toHaveProperty('secret')
+    expect(mergeWecomConfig({ secret: 'nope', chats: [] }, '/tmp/identities')).not.toHaveProperty('secret')
+    expect(mergeWecomConfig({ chats: [] }, '/tmp/identities').chats).toEqual([])
   })
 })
 
@@ -281,22 +300,23 @@ describe('Feishu on the same identity', () => {
     expect(planCompanion(feishuDm('新建业务线', 'o'), undefined)?.text).toContain('--init')
   })
 
-  it('splits oc_ chats onto Feishu and leaves the Feishu CLI alone', () => {
+  it('records oc_ chats on the role and leaves the Feishu source alone', () => {
     const identity = parseIdentityFile(readFileSync(EXAMPLE, 'utf8'))
     const mixed = { ...identity, scope: { ...identity.scope, groups: [...identity.scope.groups, { chatId: 'oc_trade', name: '飞书群' }] } }
     const dir = join(temp(), 'identities')
     openFactory(dir).saveIdentity(mixed)
     const wecom = wecomKind.schema.parse({ identitiesDir: dir, chats: [], directMessages: true })
     const feishu = feishuKind.schema.parse({ identitiesDir: dir, cli: '/Users/pencil/.local/bin/lark-bot', directMessages: true, otherChats: 'mentions' })
-    expect(wecomKind.scope!({ meta: { chatId: 'wr_trade', direct: false } }, wecom).listened).toBe(true)
+    expect(wecomKind.scope!({ meta: { chatId: 'wr_trade', direct: false } }, wecom).listened).toBe(false)
     expect(wecomKind.scope!({ meta: { chatId: 'oc_trade', direct: false } }, wecom).listened).toBe(false)
-    expect(feishuKind.scope!({ meta: { chatId: 'oc_trade', direct: false } }, feishu)).toMatchObject({ listened: true, row: 'oc_trade' })
-    expect(mergeWecomConfig({ chats: [] }, dir, [mixed]).chats).toEqual([{ chatId: 'wr_trade', name: '外贸跟单群' }])
-    expect(mergeFeishuConfig({ cli: '/Users/pencil/.local/bin/lark-bot', otherChats: 'mentions', chats: [{ chatId: 'oc_old', listen: 'all' }] }, dir, [mixed])).toMatchObject({
+    expect(feishuKind.scope!({ meta: { chatId: 'oc_trade', direct: false } }, feishu)).toMatchObject({ listened: true, row: 'other' })
+    expect(feishuKind.policy!.rows!(feishu).map(row => row.id)).not.toContain('oc_trade')
+    expect(mergeWecomConfig({ chats: [] }, dir).chats).toEqual([])
+    expect(mergeFeishuConfig({ cli: '/Users/pencil/.local/bin/lark-bot', otherChats: 'mentions', chats: [{ chatId: 'oc_old', listen: 'all' }] }, dir)).toMatchObject({
       cli: '/Users/pencil/.local/bin/lark-bot', otherChats: 'mentions', directMessages: true,
-      chats: [{ chatId: 'oc_old', listen: 'all' }, { chatId: 'oc_trade', name: '飞书群', listen: 'mentions' }],
+      chats: [{ chatId: 'oc_old', listen: 'all' }],
     })
-    const wired = planCompanion(feishuDm('你好'), openFactory(dir))
-    expect(wired?.text).toBe(identity.smoke)
+    expect(planCompanion(feishuDm('你好'), openFactory(dir))).toBeUndefined()
+    expect(readFileSync(join(dir, '..', 'roles', `${mixed.id}.md`), 'utf8')).toContain('不改飞书命令行')
   })
 })

@@ -1,4 +1,4 @@
-# Business line wired by BotFather onto the one WeCom bot.
+# Role written by BotFather for a new WeCom bot the operator creates and hangs.
 # permissions stays deferred: this file is not an allow list, and it is not a BotID.
 id: trade-followup
 name: 外贸跟单伴侣

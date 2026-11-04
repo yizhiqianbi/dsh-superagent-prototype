@@ -1,10 +1,9 @@
-/** Applies a business-line identity onto the local superagent profile and the one WeCom bot. */
+/** Writes a role package onto the local profile. It does not create a WeCom bot or hang the role on the current one. */
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { chatConflict } from './grill.ts'
+import { chatConflict, hangNotice } from './grill.ts'
 import { scrub } from './secrets.ts'
-import { chatChannel } from './schema.ts'
 import { enableFeishuPlugin, enableWecomPlugin, pushWecomSettings } from './settings.ts'
 import { ensureRoute, loadIdentities, openFactory, parseIdentityFile } from './store.ts'
 import type { BusinessIdentity } from './schema.ts'
@@ -19,7 +18,7 @@ export interface WireOptions {
 }
 
 function usage(): string {
-  return '用法: botfactory-wire [--dry-run] [--profile 目录] [--init] [身份文件.yml]\nBotFather 在企业微信和飞书的私聊里开线，不会新开 BotID。'
+  return '用法: botfactory-wire [--dry-run] [--profile 目录] [--init] [身份文件.yml]\n--init 只准备私聊里的 BotFather。身份文件写成角色包。分马甲：BotID 你自己建，这里只管 role，不把角色并到当前机器人。'
 }
 
 /** The superagent profile that already has a cordis patch, when one is on this machine. */
@@ -60,26 +59,22 @@ function identitiesDir(profile: string): string {
 }
 
 function describe(identity: BusinessIdentity, profile: string | undefined): string[] {
-  const dir = profile ? identitiesDir(profile) : '<profile>/botfactory/identities'
-  const wecomGroups = identity.scope.groups.filter(group => chatChannel(group.chatId) === 'wecom')
-  const feishuGroups = identity.scope.groups.filter(group => chatChannel(group.chatId) === 'feishu')
-  const show = (groups: typeof identity.scope.groups) => groups.length ? groups.map(group => group.name ? `${group.chatId}（${group.name}）` : group.chatId).join('、') : '无'
-  const where = identity.scope.otherChats === 'mentions'
-    ? `可在私聊和所有已接入的群里说话。点名的企业微信群：${show(wecomGroups)}。飞书群：${show(feishuGroups)}。`
-    : `私聊：${identity.scope.directMessages ? '两边都开' : '这条线不占私聊'}。企业微信群：${show(wecomGroups)}。飞书群：${show(feishuGroups)}。`
+  const root = profile ? join(profile, 'botfactory') : '<profile>/botfactory'
   return [
     `校验通过：${identity.name}（${identity.id}）`,
-    'BotFather 在企业微信和飞书的私聊里开线，不会新开 BotID。权限先不做。',
-    where,
-    `写入 ${dir}/${identity.id}.yml`,
-    `写入 ${profile ? join(profile, 'botfactory', 'companions', `${identity.id}.md`) : '<profile>/botfactory/companions/' + identity.id + '.md'}`,
+    hangNotice(identity),
+    `写入 ${root}/identities/${identity.id}.yml`,
+    `写入 ${root}/companions/${identity.id}.md`,
+    `写入 ${root}/roles/${identity.id}.md`,
     `招呼：${identity.smoke}`,
+    '权限先不做。不创建机器人，也不收 BotID。',
   ]
 }
 
 /**
- * Validates an identity file and, unless `--dry-run`, writes the profile fragments and asks the running panel to
- * listen on those chats. Direct messages are turned on because BotFather lives there.
+ * Validates an identity file and, unless `--dry-run`, writes the role package.
+ * `--init` and a real run also point the grill's directory at that package and leave direct messages on.
+ * They do not copy the role's chats onto the current bot.
  */
 export async function runBotfactory(options: WireOptions): Promise<number> {
   const env = options.env ?? process.env
@@ -92,7 +87,7 @@ export async function runBotfactory(options: WireOptions): Promise<number> {
     const identity = args.file ? parseIdentityFile(readFileSync(args.file, 'utf8')) : undefined
     const profile = profileDir(args.profile, env, options.home ?? homedir())
     const lines = [
-      ...identity ? describe(identity, profile) : ['准备 BotFather 的私聊入口。还是这一个机器人。'],
+      ...identity ? describe(identity, profile) : ['准备 BotFather 的私聊入口。角色另挂，BotID 你自己建。'],
       profile ? `配置目录：${profile}` : '这台机器上还没有 superagent 的 cordis.patch.yml。',
     ]
     if (args.dryRun) {
@@ -113,8 +108,7 @@ export async function runBotfactory(options: WireOptions): Promise<number> {
     const patch = readFileSync(patchPath, 'utf8')
     const next = enableFeishuPlugin(enableWecomPlugin(patch))
     if (next !== patch) writeFileSync(patchPath, next)
-    const identities = loadIdentities(dir)
-    const status = await pushWecomSettings(dir, identities, options.fetch ?? fetch)
+    const status = await pushWecomSettings(dir, options.fetch ?? fetch)
     for (const line of lines) log(scrub(line, env))
     log(scrub(status, env))
     log(next === patch ? '企业微信和飞书插件本来就是开的。' : '已在 cordis.patch.yml 里打开企业微信和飞书插件。改插件开关要重启一次。')

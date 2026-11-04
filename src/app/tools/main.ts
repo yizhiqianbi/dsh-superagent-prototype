@@ -3,7 +3,6 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { z } from 'zod'
 import { applyBotfather, factoryDir, factoryKey } from '../../botfactory/harness.ts'
-import { pushWecomSettings } from '../../botfactory/settings.ts'
 import { openFactory } from '../../botfactory/store.ts'
 import { UserError, followupOwners, key, reasonText, type Decision, type DecisionKind, type EngineForMainSession, type EngineForPeople, type OutboundMessage }
   from '../../core/index.ts'
@@ -160,7 +159,7 @@ function routeTool(host: MainToolsHost): Tool {
 function botfatherTool(host: MainToolsHost): Tool {
   return tool({
     name: 'botfather',
-    description: `Speak on the direct message that is opening a business line. Pass trigger_id and the text to say. When the line is settled, also pass identity: name, persona, scope (directMessages, otherChats none or mentions, groups), autoReply, autoAdvance, humanApprove, formatter, escalation, erp, and smoke. id may be omitted. Permissions stay deferred. IM limit: ${IM_WORDS} words.`,
+    description: `Speak on the direct message that is opening a business line. Pass trigger_id and the text to say. When the line is settled, also pass identity: name, persona, scope (directMessages, otherChats none or mentions, groups), autoReply, autoAdvance, humanApprove, formatter, escalation, erp, and smoke. id may be omitted. The identity is a role for a new WeCom bot the operator will create. Do not include a BotID or a Secret. Permissions stay deferred. IM limit: ${IM_WORDS} words.`,
     schema: z.object({
       trigger_id: z.string().describe('The candidate card\'s trigger_id.'),
       text: z.string().optional().describe('What to say on that direct message.'),
@@ -178,12 +177,10 @@ function botfatherTool(host: MainToolsHost): Tool {
       if (result.say) {
         const purpose = result.wired ? 'wire' : result.closed ? 'close' : 'say'
         host.send({ id: key('botfather', trigger.id, purpose), channel: trigger.channel, text: result.say, kind: 'notice' })
-        await host.sendReplies()
       }
-      if (result.wired) {
-        void pushWecomSettings(dir, library.identities()).catch(() => { /* The identity file is already written. */ })
-        return { wired: result.wired.id, name: result.wired.name }
-      }
+      if (result.hang) host.send({ id: key('botfather', trigger.id, 'hang'), channel: trigger.channel, text: result.hang, kind: 'notice' })
+      if (result.say || result.hang) await host.sendReplies()
+      if (result.wired) return { wired: result.wired.id, name: result.wired.name }
       if (result.closed) return { closed: true }
       return { said: true }
     },
