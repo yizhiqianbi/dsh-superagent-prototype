@@ -2,7 +2,7 @@
 import { z } from 'zod'
 import { UserError, key } from '../core/index.ts'
 import { policyVersion, type Settings, type SettingsOrigin } from '../policy.ts'
-import { masterPrompt, workerPrompt, sharedPrompt, guides, mainAdmissionPolicy, handoffPolicy, teamDefaults, sourceSkills, cliNotes } from './context.ts'
+import { masterPrompt, workerPrompt, sharedPrompt, guides, mainAdmissionPolicy, botfatherPrompt, handoffPolicy, teamDefaults, sourceSkills, cliNotes } from './context.ts'
 import { environmentLines, type Variable } from './execution-environment.ts'
 import { promptsNotice } from './notices.ts'
 import type { Sessions } from './sessions.ts'
@@ -109,7 +109,7 @@ export function promptParts(config: PromptConfig, role: Role, environment?: stri
     fixed('runtime/shared'), fixed(`runtime/${role}`),
     ...TEAM_SECTIONS.map(team),
     ...['subscriptions', 'replies', role === 'orchestrator' ? 'dispatch' : 'work'].map(name => fixed(`runtime/${name}`)),
-    ...role === 'orchestrator' ? [fixed('runtime/admission')] : [],
+    ...role === 'orchestrator' ? [fixed('runtime/admission'), { name: 'runtime/botfather', kind: 'fixed' as const, key: 'runtime/botfather', text: botfatherPrompt }] : [],
     fixed('runtime/handoff', `runtime/handoff/${role}`),
     ...environment ? [{ name: 'runtime/environment', kind: 'generated' as const, key: 'runtime/environment', text: environment }] : [],
     ...role === 'orchestrator' && policy ? [{ name: 'runtime/policy', kind: 'generated' as const, ...policy }] : [],

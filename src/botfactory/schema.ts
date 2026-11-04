@@ -1,4 +1,4 @@
-/** One business line on the single WeCom bot, and the DM-only BotFather route that creates lines. */
+/** A role for a new WeCom bot the operator creates, and the DM-only BotFather route that writes that role. */
 import { z } from 'zod'
 import { WRITE_FIELDS } from '../sources/odoo-trigger.ts'
 import { WECOM_ID } from '../sources/wecom-trigger.ts'
@@ -15,18 +15,30 @@ const WriteSurfaceSchema = z.string().trim().min(1).max(80).refine(value => {
 export const GroupSchema = z.object({
   chatId: z.string().regex(WECOM_ID),
   name: z.string().trim().min(1).max(60).optional(),
-  /** Feishu listed chats. Omitted on a WeCom chat. `oc_` ids default to mentions when this is absent. */
+  /**
+   * Feishu listed chats only. `all` receives messages that do not @ the bot.
+   * Omitted means mentions. A WeCom chat must omit this: that connection only delivers group messages that @ the bot.
+   */
   listen: z.enum(['mentions', 'all']).optional(),
 }).strict()
-/** Feishu chat ids in this host. Anything else in `groups` is a WeCom chat on the one bot. */
+/** Feishu chat ids in this host. Anything else in `groups` is a WeCom chat for the new bot, once the operator hangs the role. */
 export const FEISHU_CHAT = /^oc_[a-zA-Z0-9]+$/
 export const FEISHU_OPEN_ID = /^ou_[a-zA-Z0-9]+$/
 export const chatChannel = (chatId: string): 'feishu' | 'wecom' => FEISHU_CHAT.test(chatId) ? 'feishu' : 'wecom'
+/**
+ * `otherChats` is the Source chat policy, and a new role defaults to `mentions`.
+ * `mentions` registers the named chats and also takes @ mentions in every other connected group.
+ * `none` is the opt-out: only `groups`.
+ * WeCom has no value that hears a group without an @. `listen: all` is only for a Feishu `oc_` chat.
+ * Recording this does not flip the Source switch.
+ */
 export const ScopeSchema = z.object({
   directMessages: z.boolean(),
+  otherChats: z.enum(['none', 'mentions']).default('mentions'),
   groups: z.array(GroupSchema).max(40),
-}).strict().refine(scope => scope.directMessages || scope.groups.length > 0, 'Name a direct chat or a group')
+}).strict().refine(scope => scope.directMessages || scope.groups.length > 0 || scope.otherChats === 'mentions', 'Name a direct chat, a group, or every connected group')
   .refine(scope => new Set(scope.groups.map(group => group.chatId)).size === scope.groups.length, 'Duplicate chat IDs')
+  .refine(scope => scope.groups.every(group => group.listen === undefined || FEISHU_CHAT.test(group.chatId)), 'listen is only for a Feishu oc_ chat. WeCom groups arrive only when the bot is @ mentioned')
 export const EscalationSchema = z.object({
   name: z.string().trim().min(1).max(40).refine(plain, 'Use plain speech'),
   wecomUserId: z.string().regex(WECOM_ID).optional(),
@@ -42,8 +54,8 @@ const ErpOnSchema = z.object({
 }).strict()
 
 /**
- * A business line on the WeCom bot and the Feishu bot together. `permissions` stays `deferred`: this file does not grant an allow-list.
- * `id` is the template id. `name` is what people call the line. A group is Feishu when its chat id starts with `oc_`, and WeCom otherwise.
+ * A role the operator hangs on a new WeCom bot. `permissions` stays `deferred`: this file does not grant an allow-list, and it does not store a BotID or a Secret.
+ * `id` is the template id. `name` is what people call the role. A group is Feishu when its chat id starts with `oc_`, and WeCom otherwise.
  */
 export const BusinessIdentitySchema = z.object({
   id: z.string().regex(/^[a-z][a-z0-9-]{1,40}$/).refine(id => id !== 'botfather', 'botfather is the factory route, not a business line'),
@@ -62,7 +74,7 @@ export const BusinessIdentitySchema = z.object({
 export type BusinessIdentity = z.infer<typeof BusinessIdentitySchema>
 export type ErpConfig = BusinessIdentity['erp']
 
-/** BotFather is a direct-message route on the existing WeCom bot and the existing Feishu bot. `operators` empty means any DM that shows factory intent. An operator id may be a WeCom userid or a Feishu open_id. */
+/** BotFather is a direct-message route used to write a role. `operators` empty means any DM that shows factory intent. An operator id may be a WeCom userid or a Feishu open_id. The route is not a BotID. */
 export const BotfatherRouteSchema = z.object({
   id: z.literal('botfather'),
   name: z.string().trim().min(1).max(40).default('BotFather'),
@@ -72,21 +84,13 @@ export const BotfatherRouteSchema = z.object({
 export type BotfatherRoute = z.infer<typeof BotfatherRouteSchema>
 export const DEFAULT_ROUTE: BotfatherRoute = { id: 'botfather', name: 'BotFather', route: 'dm', operators: [] }
 
-export const GRILL_SLOTS = ['name', 'persona', 'scope', 'autoReply', 'autoAdvance', 'humanApprove', 'formatter', 'escalation', 'erp', 'smoke', 'confirm'] as const
-export type GrillSlot = typeof GRILL_SLOTS[number]
-export const GrillDraftSchema = z.object({
-  slot: z.enum(GRILL_SLOTS),
-  id: z.string().optional(),
-  name: z.string().optional(),
-  persona: z.string().optional(),
-  directMessages: z.boolean().optional(),
-  groups: z.array(GroupSchema).optional(),
-  autoReply: z.array(z.string()).optional(),
-  autoAdvance: z.array(z.string()).optional(),
-  humanApprove: z.array(z.string()).optional(),
-  formatter: z.string().optional(),
-  escalation: z.array(EscalationSchema).optional(),
-  erp: z.discriminatedUnion('enabled', [ErpOffSchema, ErpOnSchema]).optional(),
-  smoke: z.string().optional(),
+const FactoryLineSchema = z.object({
+  role: z.enum(['user', 'assistant']),
+  text: z.string().min(1).max(2000),
 }).strict()
-export type GrillDraft = z.infer<typeof GrillDraftSchema>
+/** An open BotFather conversation. The session asks and decides; this only remembers the talk. */
+export const FactoryDraftSchema = z.object({
+  open: z.literal(true),
+  lines: z.array(FactoryLineSchema).max(40).default([]),
+}).strict()
+export type FactoryDraft = z.infer<typeof FactoryDraftSchema>

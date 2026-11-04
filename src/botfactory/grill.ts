@@ -1,38 +1,29 @@
-/** BotFather's direct-message grill: one question at a time, then a business-line identity. */
+/** BotFather's entry on a direct message, and the role package a settled line leaves for a new bot. */
 import { createHash } from 'node:crypto'
-import { wordCount, IM_WORDS } from '../infra/text.ts'
-import { WECOM_ID } from '../sources/wecom-trigger.ts'
-import { BusinessIdentitySchema, FEISHU_OPEN_ID, PLAIN_SPEECH, chatChannel, type BusinessIdentity, type ErpConfig, type GrillDraft, type GrillSlot } from './schema.ts'
+import { checkedImText } from '../infra/text.ts'
+import { WECOM_FILE_MISSED, WECOM_FILE_NOTE, WECOM_IMAGE_EXTRA, WECOM_IMAGE_MISSED, WECOM_QUOTE } from '../sources/wecom-trigger.ts'
+import type { BusinessIdentity } from './schema.ts'
+import { chatChannel } from './schema.ts'
 
 const STARTS = ['新建业务线', '新业务线', '开一条线', '做一条业务线', '/botfather', '/new', 'botfather']
-const QUESTIONS: Record<Exclude<GrillSlot, 'confirm'>, string> = {
-  name: '这条线叫什么？例如：外贸跟单伴侣。',
-  persona: '用一句话说它是谁。例如：你是跟单同事，口语盯客户、订单和到账。',
-  scope: '它在哪说话？「只私聊」马上能用。企业微信群写 wr_，飞书群写 oc_。例如：私聊，群 wr_xxx。',
-  autoReply: '哪些话直接回？例如：打招呼、问进度。',
-  autoAdvance: '哪些事直接往下推进？例如：跟单、催办、到账确认。',
-  humanApprove: '哪些事要对方拍板？例如：改价格、承诺交期。',
-  formatter: '谁来把选项说清楚？例如：跟单同事。',
-  escalation: '权限先不做。卡住了找谁？例如：外贸负责人。',
-  erp: '要接 Odoo 吗？回复「不接」，或「接 Odoo，以 crm.lead 为准，写 phone」。',
-  smoke: '私聊打招呼说哪句？用口语，别写内部词。',
-}
-export const BOTFATHER_INIT = '要开新线，先在这台机器跑 botfactory-wire --init，然后再发「新建业务线」。还是这一个机器人。'
-const ROUTE_BROKEN = 'BotFather 的路由文件读不了，私聊工厂先停着。'
-const SAVE_FAILED = '没存上。再发一次。'
-const SMOKE_RETRY = '这句不行。用口语说你在，别写内部词。'
 
-export interface BotfatherTurn {
-  handled: true
-  text: string
-  draft: GrillDraft | null
-  wired?: BusinessIdentity
-}
-export type FactoryRoute = { ok: true; operators: readonly string[] } | { ok: false }
+export const BOTFATHER_INIT = '要开新线，先在这台机器跑 botfactory-wire --init，然后再发「新建业务线」。角色写好后另挂，BotID 你自己建。'
+export const ROUTE_BROKEN = 'BotFather 的路由文件读不了，私聊工厂先停着。'
+export const SAVE_FAILED = '没存上。再发一次。'
+export const FACTORY_STOP = '好，这条先停。'
 
-/** A factory command, and any name typed after it. Longer phrases are matched first. */
+/** A picture token or a failed download is not the command. The words around it still are. */
+function spokenCommand(text: string): string {
+  return text.trim().split('\n').map(line => line.trim()).filter(line => {
+    if (!line || line === WECOM_QUOTE) return false
+    if (line === WECOM_FILE_NOTE || line === WECOM_IMAGE_MISSED || line === WECOM_FILE_MISSED || line === WECOM_IMAGE_EXTRA) return false
+    return !/^\[(?:图片|文件) wximg_[1-9]\d*\]$/.test(line)
+  }).join('\n')
+}
+
+/** A factory command, and any words typed after it. Longer phrases are matched first. */
 export function factoryStart(text: string): { rest: string } | undefined {
-  const trimmed = text.trim()
+  const trimmed = spokenCommand(text)
   const folded = trimmed.toLowerCase()
   for (const phrase of STARTS) {
     const probe = phrase.startsWith('/') || phrase === 'botfather' ? folded : trimmed
@@ -44,8 +35,8 @@ export function factoryStart(text: string): { rest: string } | undefined {
   return undefined
 }
 
-function spoken(text: string, fallback: string): string {
-  return wordCount(text) <= IM_WORDS ? text : fallback
+export function factoryStop(text: string): boolean {
+  return /^(取消|算了|\/cancel)$/i.test(text.trim())
 }
 
 /** The id stored on disk. A Latin token is kept; a Chinese name gets a stable `line-` id. */
@@ -53,98 +44,6 @@ export function identityId(name: string): string {
   const latin = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40)
   if (/^[a-z][a-z0-9-]{1,40}$/.test(latin) && latin !== 'botfather') return latin
   return `line-${createHash('sha256').update(name).digest('hex').slice(0, 8)}`
-}
-
-function parseName(text: string): { id: string; name: string } | undefined {
-  const trimmed = text.trim()
-  const pair = /^([a-z][a-z0-9-]{1,40})\s+(.+)$/.exec(trimmed)
-  if (pair?.[1] && pair[2] && pair[1] !== 'botfather') {
-    const name = pair[2].trim()
-    if (name.length > 0 && name.length <= 40 && !PLAIN_SPEECH.test(name)) return { id: pair[1], name }
-  }
-  if (!trimmed || trimmed.length > 40 || trimmed === 'botfather' || PLAIN_SPEECH.test(trimmed)) return undefined
-  return { id: identityId(trimmed), name: trimmed }
-}
-
-function parseScope(text: string): { directMessages: boolean; groups: { chatId: string }[] } | undefined {
-  const ids = [...text.matchAll(/(?:群|chatid|chat)\s*[:：]?\s*([A-Za-z0-9_@.+/=-]{1,128})/gi)]
-    .map(match => match[1] ?? '')
-    .filter(id => WECOM_ID.test(id))
-  const groups = [...new Set(ids)].map(chatId => ({ chatId }))
-  if (/只私聊|仅私聊/.test(text)) return { directMessages: true, groups: [] }
-  if (groups.length && /私聊|\bdm\b/i.test(text)) return { directMessages: true, groups }
-  if (groups.length) return { directMessages: false, groups }
-  if (/私聊|\bdm\b/i.test(text)) return { directMessages: true, groups: [] }
-  return undefined
-}
-
-function parseList(text: string): string[] | undefined {
-  const items = text.split(/[、,，;\n]/).map(item => item.trim()).filter(Boolean)
-  if (!items.length || items.length > 20 || items.some(item => item.length > 80 || PLAIN_SPEECH.test(item))) return undefined
-  return items
-}
-
-function parseEscalation(text: string): { name: string; wecomUserId?: string; feishuOpenId?: string }[] | undefined {
-  const items = parseList(text)
-  if (!items) return undefined
-  const contacts = items.map(item => {
-    const parts = item.split(/\s+/)
-    const last = parts.at(-1) ?? ''
-    if (parts.length >= 2 && FEISHU_OPEN_ID.test(last)) return { name: parts.slice(0, -1).join(' '), feishuOpenId: last }
-    if (parts.length >= 2 && WECOM_ID.test(last)) return { name: parts.slice(0, -1).join(' '), wecomUserId: last }
-    return { name: item }
-  })
-  if (contacts.some(contact => !contact.name || contact.name.length > 40)) return undefined
-  return contacts
-}
-
-function parseErp(text: string): ErpConfig | undefined {
-  const trimmed = text.trim()
-  if (trimmed.includes('不接') || /^(不用|不需要|没有)$/.test(trimmed)) return { enabled: false }
-  if (!/接|odoo/i.test(trimmed)) return undefined
-  const models = trimmed.match(/[a-z]+\.[a-z]+/gi) ?? []
-  if (models.some(model => model.toLowerCase() !== 'crm.lead')) return undefined
-  const write = [...new Set([...trimmed.matchAll(/\b(phone|email_from|contact_name|partner_name|function|description)\b/g)].map(match => match[1] ?? ''))]
-  return {
-    enabled: true, adapter: 'odoo', sourceOfTruth: 'Odoo crm.lead',
-    read: ['已有的电话、邮箱、联系人、公司'],
-    write: write.filter(Boolean).length ? write.filter(Boolean) : ['phone', 'email_from', 'contact_name'],
-  }
-}
-
-function parseSmoke(text: string): string | undefined {
-  const trimmed = text.trim()
-  if (trimmed.length < 2 || trimmed.length > 160 || /闸门|呈报|WECOM_BOT_SECRET|\bBotID\b|\bsecret\b/i.test(trimmed)) return undefined
-  return trimmed
-}
-
-function blank(slot: GrillSlot): GrillDraft {
-  return { slot }
-}
-
-function summary(draft: GrillDraft): string {
-  const erp = draft.erp?.enabled ? `接 Odoo，以${draft.erp.sourceOfTruth}为准` : '不接 Odoo'
-  const groups = draft.groups?.length ? draft.groups.map(group => group.chatId).join('、') : '无'
-  const full = `${draft.name ?? ''}。私聊${draft.directMessages ? '开' : '关'}，群 ${groups}。自动回 ${(draft.autoReply ?? []).join('、')}。往下推进 ${(draft.autoAdvance ?? []).join('、')}。要你拍板 ${(draft.humanApprove ?? []).join('、')}。选项由${draft.formatter ?? ''}来说。权限先不做。找 ${(draft.escalation ?? []).map(item => item.name).join('、')}。${erp}。招呼：${draft.smoke ?? ''}。回复「就这样」就接上。`
-  return spoken(full, `${draft.name ?? '这条线'} 对过了。权限先不做。回复「就这样」就接上，回复「取消」作废。`)
-}
-
-function doneSpeech(identity: BusinessIdentity): string {
-  return spoken(
-    `接好了。${identity.name} 私聊就能用，不用先在群里 @。权限先不做。招呼是：${identity.smoke}`,
-    `接好了。${identity.name} 私聊就能用。权限先不做。`,
-  )
-}
-
-function finish(draft: GrillDraft): BusinessIdentity | undefined {
-  const parsed = BusinessIdentitySchema.safeParse({
-    id: draft.id, name: draft.name, persona: draft.persona,
-    scope: { directMessages: draft.directMessages, groups: draft.groups ?? [] },
-    autoReply: draft.autoReply, autoAdvance: draft.autoAdvance, humanApprove: draft.humanApprove,
-    formatter: draft.formatter, escalation: draft.escalation, erp: draft.erp, smoke: draft.smoke,
-    permissions: 'deferred',
-  })
-  return parsed.success ? parsed.data : undefined
 }
 
 /** Another line already owns this group. The same id may keep its own chats. */
@@ -156,128 +55,127 @@ export function chatConflict(existing: readonly BusinessIdentity[], next: Busine
   return undefined
 }
 
-function cancelled(text: string): boolean {
-  return /^(取消|算了|\/cancel)$/i.test(text.trim())
-}
-function confirmed(text: string): boolean {
-  return /^(就这样|确认接上|\/done)$/i.test(text.trim())
+function namedGroups(identity: BusinessIdentity, channel: 'wecom' | 'feishu'): string {
+  const groups = identity.scope.groups.filter(group => chatChannel(group.chatId) === channel)
+  if (!groups.length) return '无'
+  return groups.map(group => {
+    const listen = group.listen === 'all' ? '，listen: all' : ''
+    return group.name ? `${group.chatId}（${group.name}${listen}）` : `${group.chatId}${listen}`
+  }).join('、')
 }
 
-function fill(draft: GrillDraft, text: string, identities: readonly BusinessIdentity[]): BotfatherTurn {
-  const slot = draft.slot
-  const keep = (retry: string): BotfatherTurn => ({ handled: true, text: retry, draft })
-  switch (slot) {
-    case 'name': {
-      const named = parseName(text)
-      if (!named) return keep(QUESTIONS.name)
-      return { handled: true, text: QUESTIONS.persona, draft: { ...draft, slot: 'persona', id: named.id, name: named.name } }
-    }
-    case 'persona': {
-      const persona = text.trim()
-      if (persona.length < 1 || persona.length > 200 || PLAIN_SPEECH.test(persona)) return keep(QUESTIONS.persona)
-      return { handled: true, text: QUESTIONS.scope, draft: { ...draft, slot: 'scope', persona } }
-    }
-    case 'scope': {
-      const scope = parseScope(text)
-      if (!scope) return keep(QUESTIONS.scope)
-      return { handled: true, text: QUESTIONS.autoReply, draft: { ...draft, slot: 'autoReply', ...scope } }
-    }
-    case 'autoReply': {
-      const autoReply = parseList(text)
-      if (!autoReply) return keep(QUESTIONS.autoReply)
-      return { handled: true, text: QUESTIONS.autoAdvance, draft: { ...draft, slot: 'autoAdvance', autoReply } }
-    }
-    case 'autoAdvance': {
-      const autoAdvance = parseList(text)
-      if (!autoAdvance) return keep(QUESTIONS.autoAdvance)
-      return { handled: true, text: QUESTIONS.humanApprove, draft: { ...draft, slot: 'humanApprove', autoAdvance } }
-    }
-    case 'humanApprove': {
-      const humanApprove = parseList(text)
-      if (!humanApprove) return keep(QUESTIONS.humanApprove)
-      return { handled: true, text: QUESTIONS.formatter, draft: { ...draft, slot: 'formatter', humanApprove } }
-    }
-    case 'formatter': {
-      const formatter = text.trim()
-      if (!formatter || formatter.length > 60 || PLAIN_SPEECH.test(formatter)) return keep(QUESTIONS.formatter)
-      return { handled: true, text: QUESTIONS.escalation, draft: { ...draft, slot: 'escalation', formatter } }
-    }
-    case 'escalation': {
-      const escalation = parseEscalation(text)
-      if (!escalation) return keep(QUESTIONS.escalation)
-      return { handled: true, text: QUESTIONS.erp, draft: { ...draft, slot: 'erp', escalation } }
-    }
-    case 'erp': {
-      const erp = parseErp(text)
-      if (!erp) return keep(QUESTIONS.erp)
-      return { handled: true, text: QUESTIONS.smoke, draft: { ...draft, slot: 'smoke', erp } }
-    }
-    case 'smoke': {
-      const smoke = parseSmoke(text)
-      if (!smoke) return keep(SMOKE_RETRY)
-      const next: GrillDraft = { ...draft, slot: 'confirm', smoke }
-      return { handled: true, text: summary(next), draft: next }
-    }
-    case 'confirm': {
-      if (!confirmed(text)) return keep(summary(draft))
-      const identity = finish(draft)
-      if (!identity) return keep('还没齐。回复「取消」重来。')
-      const conflict = chatConflict(identities, identity)
-      if (conflict) return keep(spoken(`${conflict}。换一个群，或回复「取消」。`, '这个群已经被别的线用了。回复「取消」重来。'))
-      return { handled: true, text: doneSpeech(identity), draft: null, wired: identity }
-    }
+/** What the hang note says about groups. WeCom still requires an @. `listen: all` is Feishu only. */
+function scopeNote(identity: BusinessIdentity): string {
+  const registered = `已登记的企业微信群：${namedGroups(identity, 'wecom')}。已登记的飞书群：${namedGroups(identity, 'feishu')}。`
+  const platform = '企业微信长连接只推送群里 @ 机器人的消息，没有不 @ 也收的模式。飞书 oc_ 群可以写 listen: all，那只对飞书有效。'
+  switch (identity.scope.otherChats) {
+    case 'mentions':
+      return [
+        '主动接群：私聊，已登记的群，以及其余已接入的群里 @ 机器人的消息。',
+        platform,
+        '挂到新机器人时，把已登记的群写进那个来源的「接收的群」，「其他群」选「接收 @」。不要改现在这个来源的开关。',
+        registered,
+      ].join('\n')
+    case 'none':
+      return [
+        `不接其余的群，只留已登记的群。私聊${identity.scope.directMessages ? '开' : '关'}。`,
+        platform,
+        '这些群记在角色里，不会自动加进现在这个机器人。挂到新机器人时再登记，其他群保持不接收。',
+        registered,
+      ].join('\n')
     default: {
-      const leftover: never = slot
-      return leftover
+      const unreachable: never = identity.scope.otherChats
+      return unreachable
     }
   }
 }
 
 /**
- * One DM turn of BotFather. Group chats are never handled. A reserved operator list, when non-empty, is only who may
- * enter the factory; everyone else keeps the ordinary companion line.
+ * What the direct message says after a role is written. Short enough for the WeCom send limit.
+ * It names where a BotID and Secret go. It does not ask for either value.
  */
-export function botfatherTurn(input: {
-  direct: boolean
-  userid: string
-  text: string
-  route: FactoryRoute
-  draft: GrillDraft | undefined
-  identities: readonly BusinessIdentity[]
-}): BotfatherTurn | { handled: false } {
-  if (!input.direct || !WECOM_ID.test(input.userid)) return { handled: false }
-  const starting = factoryStart(input.text)
-  if (!input.route.ok) {
-    if (input.draft || starting) return { handled: true, text: ROUTE_BROKEN, draft: null }
-    return { handled: false }
-  }
-  if (input.route.operators.length > 0 && !input.route.operators.includes(input.userid)) return { handled: false }
-  if (starting) {
-    const named = starting.rest ? parseName(starting.rest) : undefined
-    const draft = named ? { ...blank('persona'), id: named.id, name: named.name } : blank('name')
-    return { handled: true, text: named ? QUESTIONS.persona : QUESTIONS.name, draft }
-  }
-  if (!input.draft) return { handled: false }
-  if (cancelled(input.text)) return { handled: true, text: '好，这条先停。', draft: null }
-  return fill(input.draft, input.text, input.identities)
+export function hangNotice(identity: BusinessIdentity): string {
+  return checkedImText([
+    `角色「${identity.name}」已写好，还没挂到这个机器人上。`,
+    '文件在 botfactory 的 identities、companions、roles。',
+    '请你新建企业微信智能机器人，选长连接。',
+    'BotID 放 WECOM_BOT_ID，Secret 放 WECOM_BOT_SECRET，不要发在这里。',
+    '把这份角色指过去，不要并到现在这个机器人。',
+  ].join(''))
 }
 
-export function smokeFor(identities: readonly BusinessIdentity[], direct: boolean, chatId: string): string | undefined {
-  const matches = direct
-    ? identities.filter(identity => identity.scope.directMessages)
-    : identities.filter(identity => identity.scope.groups.some(group => group.chatId === chatId))
-  return matches.length === 1 ? matches[0]!.smoke : undefined
+/** The hang note stored beside the role. Longer than the direct message, still with no credential value. */
+export function roleNote(identity: BusinessIdentity): string {
+  const reach = scopeNote(identity)
+  const feishu = identity.scope.groups.some(group => chatChannel(group.chatId) === 'feishu')
+    ? ['飞书群只记在角色里。不改飞书命令行，也不改飞书凭证。', '']
+    : []
+  return [
+    `# ${identity.name}`,
+    '',
+    '这是一份给新的企业微信智能机器人用的角色。分马甲：BotID 你自己建，BotFather 只管 role。这里不写、不收 BotID 和 Secret，也不调用接口去创建机器人。',
+    '',
+    '## 写了什么',
+    '',
+    `- \`botfactory/identities/${identity.id}.yml\`：人设、SOP、范围、模板。`,
+    `- \`botfactory/companions/${identity.id}.md\`：这条线怎么说话。`,
+    `- \`botfactory/roles/${identity.id}.md\`：这份挂载说明。`,
+    '',
+    `招呼：${identity.smoke}`,
+    reach,
+    '权限：deferred。这不是允许名单。',
+    ...feishu,
+    '## 你自己挂',
+    '',
+    '1. 在企业微信管理后台新建一个智能机器人。API 模式选「长连接」。',
+    '2. 把那个机器人的 BotID 放到它自己的环境变量 `WECOM_BOT_ID`，或写进来源里的 BotID 栏。把长连接 Secret 放到 `WECOM_BOT_SECRET`。不要把这两个值发回对话，也不要写进身份文件。',
+    '3. 让那个 profile 使用上面的身份文件和说法。已登记的群写进那个机器人来源的「接收的群」。其他群按这份角色：mentions 是接收 @，none 是不接收。企业微信群里仍然要 @。不要把这条线并进现在跟你说话的这个机器人。',
+    '',
+    '一个进程里，同一个 BotID 只能保持一条长连接。新马甲用新的 BotID。',
+    '',
+  ].join('\n')
 }
 
-/** Prompt fragment the companion reads for one wired line. */
+function listedChats(identity: BusinessIdentity): string {
+  if (!identity.scope.groups.length) return 'none'
+  return identity.scope.groups.map(group => {
+    const channel = chatChannel(group.chatId) === 'feishu' ? 'Feishu' : 'WeCom'
+    const listen = group.listen ? `, listen: ${group.listen}` : ''
+    return group.name ? `${channel} ${group.chatId} (${group.name}${listen})` : `${channel} ${group.chatId}${listen}`
+  }).join(', ')
+}
+
+/** Where the new bot may speak. WeCom still requires an @. `listen: all` is Feishu only. */
+function scopeLines(identity: BusinessIdentity): string[] {
+  const listed = listedChats(identity)
+  const direct = `Direct messages: ${identity.scope.directMessages ? 'yes' : 'no'}.`
+  const platform = 'WeCom delivers a group message only when the bot is @ mentioned. There is no WeCom listen:all. A Feishu oc_ chat may set listen: all.'
+  switch (identity.scope.otherChats) {
+    case 'mentions':
+      return [
+        direct,
+        identity.scope.groups.length
+          ? `Groups: the registered chats, and every other connected group when the bot is @ mentioned. Registered: ${listed}.`
+          : 'Groups: every connected group when the bot is @ mentioned. Registered chats: none.',
+        'On the new bot, register those chats and set other chats to mentions.',
+        platform,
+      ]
+    case 'none':
+      return [
+        direct,
+        `Groups: only the registered chats. Registered: ${listed}.`,
+        'Other connected groups stay off.',
+        platform,
+      ]
+    default: {
+      const unreachable: never = identity.scope.otherChats
+      return unreachable
+    }
+  }
+}
+
+/** Prompt fragment the new bot reads for this role. It is not worn by the bot that ran the conversation. */
 export function companionFragment(identity: BusinessIdentity): string {
-  const groups = identity.scope.groups.length
-    ? identity.scope.groups.map(group => {
-      const channel = chatChannel(group.chatId) === 'feishu' ? 'Feishu' : 'WeCom'
-      const listen = group.listen ? `, ${group.listen}` : ''
-      return group.name ? `${channel} ${group.chatId} (${group.name}${listen})` : `${channel} ${group.chatId}${listen}`
-    }).join(', ')
-    : 'none'
   const erp = identity.erp.enabled
     ? `Odoo is on. Source of truth: ${identity.erp.sourceOfTruth}. Read: ${identity.erp.read.join('; ')}. Write: ${identity.erp.write.join(', ')}. Use the existing Odoo Source only.`
     : 'ERP is off.'
@@ -288,12 +186,11 @@ export function companionFragment(identity: BusinessIdentity): string {
   return [
     `# ${identity.name}`,
     '',
-    `Template id \`${identity.id}\`. This line shares the existing WeCom bot and the existing Feishu bot. BotFather wired it from a direct message on either channel. It is active without a group mention. WeCom still only pushes group messages that @ the bot. Feishu group ids start with oc_.`,
+    `Template id \`${identity.id}\`. This is a role for a new WeCom bot the operator creates. BotFather writes the role and does not hang it on the bot that held the conversation. Do not ask for a BotID or a Secret. Feishu group ids start with oc_. Recording chats here does not change the bot that is talking now.`,
     '',
     `Persona: ${identity.persona}`,
     '',
-    `Direct messages: ${identity.scope.directMessages ? 'yes' : 'no'}.`,
-    `Groups: ${groups}.`,
+    ...scopeLines(identity),
     '',
     `Auto-reply: ${identity.autoReply.join('; ')}.`,
     `Auto-advance: ${identity.autoAdvance.join('; ')}.`,
@@ -308,5 +205,3 @@ export function companionFragment(identity: BusinessIdentity): string {
     '',
   ].join('\n')
 }
-
-export { SAVE_FAILED }

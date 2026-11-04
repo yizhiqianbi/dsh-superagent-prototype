@@ -1,10 +1,15 @@
-# Business line wired by BotFather onto the one WeCom bot.
+# Role written by BotFather for a new WeCom bot the operator creates and hangs.
 # permissions stays deferred: this file is not an allow list, and it is not a BotID.
 id: trade-followup
 name: 外贸跟单伴侣
 persona: 你是跟单同事，用口语帮人盯客户、订单和到账。
 scope:
   directMessages: true
+  # Default 主动接群: mentions, and register the groups below.
+  # On WeCom that is still an @. The long connection does not deliver any other group message.
+  # none opts out of groups that are not registered. listen: all is Feishu oc_ only; do not set it here.
+  # Same values as a Source's other chats. This file does not flip that switch.
+  otherChats: mentions
   groups:
     # oc_ chat ids in this list are Feishu. Anything else is WeCom.
     - chatId: wr_trade

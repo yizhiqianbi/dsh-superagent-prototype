@@ -1,4 +1,5 @@
 /** Source message link resolution and candidate card assembly for the main Session. */
+import { factoryHandoff } from '../botfactory/harness.ts'
 import type { Candidate, Ticket, Trigger } from '../core/index.ts'
 import type { Commands } from '../infra/commands.ts'
 import { readFeishuLink } from '../sources/feishu-read.ts'
@@ -55,6 +56,7 @@ function referencedTickets(host: LinkHost, trigger: Trigger, known: readonly Tic
 export async function candidateCard(host: LinkHost, candidate: Candidate) {
   const primary = candidate.triggers.at(-1)!
   const settings = host.store.settings()
+  const handoff = factoryHandoff(settings, primary)
   const delivered = host.store.triggers.disposition(primary.id)?.fanout ?? []
   const referenced = referencedTickets(host, primary, candidate.tickets)
   // Triggers that a worker Session handed back as outside its ticket's scope, with the worker's reason.
@@ -66,6 +68,8 @@ export async function candidateCard(host: LinkHost, candidate: Candidate) {
     mode: settings.eval.mode, ...others.length ? { batch: others.map(trigger => triggerCard(trigger)) } : {},
     ...handedBack.length ? { handed_back: handedBack } : {}, ...relatedTickets(candidate.tickets),
     ...(delivered.length ? { delivered_to: delivered } : {}), ...(referenced.length ? { referenced_tickets: referenced.map(ticketCard) } : {}),
-    next_action: candidate.strength === 'explicit' ? 'Route it with orchestrator_route as dispatch says: accept, attach, stop or ignore.'
-      : 'Ignore it with orchestrator_route if the card shows it touches no enabled rule; else assess it with orchestrator_eval, orchestrator_eval_read, then orchestrator_eval_decide.' }
+    ...handoff ? { botfather: handoff } : {},
+    next_action: handoff ? 'This is BotFather, not a ticket. Speak with the botfather tool. The identity is a role for a new WeCom bot they will create. Do not ask for a BotID or a Secret. Do not call orchestrator_route.'
+      : candidate.strength === 'explicit' ? 'Route it with orchestrator_route as dispatch says: accept, attach, stop or ignore.'
+        : 'Ignore it with orchestrator_route if the card shows it touches no enabled rule; else assess it with orchestrator_eval, orchestrator_eval_read, then orchestrator_eval_decide.' }
 }

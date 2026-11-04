@@ -1,7 +1,10 @@
 /** WeCom Source: frame translation, gate-card framing, configuration, and the long-connection loop without live credentials. */
 import { mkdtempSync, rmSync } from 'node:fs'
+import { realpath } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { Context } from '@deepseek-ai/cordis'
+import type { Agent } from '@deepseek-ai/dsh-agent'
 import { WSAuthFailureError } from '@wecom/aibot-node-sdk'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Engine, key, type Assessor, type Executor, type Trigger } from '../src/core/index.ts'
@@ -9,17 +12,22 @@ import { checkedImText } from '../src/infra/text.ts'
 import { Commands } from '../src/infra/commands.ts'
 import { HealthBoard } from '../src/infra/health.ts'
 import { SettingsSchema, settingsPolicy } from '../src/policy.ts'
+import { MasterAssessor } from '../src/app/assessment.ts'
+import { TextCache } from '../src/app/cache.ts'
+import { candidateCard } from '../src/app/links.ts'
 import { sourceContextOf, type SourceContextDeps } from '../src/app/source-context.ts'
 import { Store } from '../src/app/store.ts'
 import { WECOM_GREETING, WECOM_RECEIVED, sendWecom, wecomCompanionNotice, wecomCompanionText, wecomGone, wecomLink, wecomOutbound, wecomTaskId, type WecomOutbound } from '../src/sources/wecom-channel.ts'
+import { imageMediaType, materializeWecomImages } from '../src/sources/wecom-image.ts'
 import { wecomThreadContext } from '../src/sources/wecom-read.ts'
 import { acquireWecomBot, bindWecomSend, resetWecomRuntime, setWecomSocketFactory, type WecomSocket } from '../src/sources/wecom-socket.ts'
 import { apply as applyWecom, queueWecomCompanion, runWecomSession, watchWecom, WECOM_CREDENTIALS, wecomCredentials, wecomKind, wecomRetry } from '../src/sources/wecom.ts'
-import { wecomTime, wecomTrigger } from '../src/sources/wecom-trigger.ts'
+import { WECOM_FILE_NOTE, WECOM_IMAGE_EXTRA, WECOM_IMAGE_MISSED, wecomTime, wecomTrigger } from '../src/sources/wecom-trigger.ts'
 import { SourceRegistry } from '../src/sources/registry.ts'
 import { testDeployment } from './fixtures/deployment.ts'
 
 const NOW = '2026-11-04T03:00:00.000Z'
+const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64')
 const saved = { ...process.env }
 const stops: AbortController[] = []
 const running: Promise<unknown>[] = []
@@ -27,6 +35,8 @@ const running: Promise<unknown>[] = []
 class FakeSocket implements WecomSocket {
   readonly handlers = new Map<string, ((payload: unknown) => void)[]>()
   readonly sent: { chatId: string; body: WecomOutbound }[] = []
+  readonly downloads: { url: string; aesKey?: string }[] = []
+  readonly files = new Map<string, Uint8Array>()
   connected = false
   closed = false
   fail: unknown
@@ -42,6 +52,12 @@ class FakeSocket implements WecomSocket {
     if (this.fail) return Promise.reject(this.fail)
     this.sent.push({ chatId, body })
     return Promise.resolve({ errcode: 0, errmsg: 'ok' })
+  }
+  downloadFile(url: string, aesKey?: string): Promise<{ buffer: Uint8Array; filename?: string }> {
+    this.downloads.push({ url, ...(aesKey ? { aesKey } : {}) })
+    const buffer = this.files.get(url)
+    if (!buffer) return Promise.reject(new Error('missing file'))
+    return Promise.resolve({ buffer, filename: '../../outside.png' })
   }
 }
 
@@ -77,7 +93,7 @@ function host(enabled = true) {
   const executor: Executor = { start: vi.fn(async () => {}), deliver: vi.fn(async () => {}), stop: vi.fn(async () => {}) }
   const engine = new Engine({ repo: store, scope: sources, policy: () => settingsPolicy(store.settings(), sources), assessor, executor,
     outbox: { send: () => {}, status: () => undefined, withdraw: () => {} } })
-  const deployment = testDeployment()
+  const deployment = testDeployment({ stateDir: directory })
   const commands = new Commands(() => deployment, {}, new AbortController().signal)
   const receive = vi.fn((trigger: Trigger) => { const result = engine.receive(trigger); engine.evaluateDue(); return result })
   const deps: SourceContextDeps = { store, engine, outbox: { send: message => { store.receipts.add(message) }, status: id => store.receipts.get(id)?.status }, commands, sources, deployment,
@@ -111,17 +127,31 @@ describe('wecom frames', () => {
       meta: { direct: true, chatId: 'boss' },
     })
     expect(wecomTrigger(textFrame({ msgtype: 'voice', text: undefined, voice: { content: '合并' } }), NOW)?.text).toBe('合并')
-    expect(wecomTrigger(textFrame({ msgtype: 'mixed', text: undefined, mixed: { msg_item: [
-      { msgtype: 'text', text: { content: '看一下' } }, { msgtype: 'image', image: { url: 'https://example.invalid/a' } },
+    const mixed = wecomTrigger(textFrame({ msgtype: 'mixed', text: undefined, mixed: { msg_item: [
+      { msgtype: 'text', text: { content: '看一下' } }, { msgtype: 'image', image: { url: 'https://example.invalid/a', aeskey: 'aes-secret' } },
       { msgtype: 'text', text: { content: '再决定' } },
-    ] } }), NOW)?.text).toBe('看一下\n再决定')
+    ] } }), NOW)
+    expect(mixed?.text).toBe('看一下\n[图片 wximg_1]\n再决定')
+    expect(mixed?.text).not.toContain('example.invalid')
+    expect(mixed?.text).not.toContain('aes-secret')
+    const quoted = wecomTrigger(textFrame({
+      text: { content: '按这个做' },
+      quote: { msgtype: 'text', text: { content: '昨天的 SOP' } },
+    }), NOW)
+    expect(quoted?.text).toBe('引用：昨天的 SOP\n按这个做')
+    const quotedPicture = wecomTrigger(textFrame({
+      text: { content: '按这个做' },
+      quote: { msgtype: 'image', image: { url: 'https://example.invalid/sop', aeskey: 'aes-secret' } },
+    }), NOW)
+    expect(quotedPicture?.text).toBe('引用：\n[图片 wximg_1]\n按这个做')
+    expect(JSON.stringify(quotedPicture?.text)).not.toContain('aes-secret')
     const click = wecomTrigger({ body: { msgid: 'evt-1', create_time: 1_700_000_000, chatid: 'wr_team', chattype: 'group',
       from: { userid: 'boss' }, msgtype: 'event', event: { eventtype: 'template_card_event', event_key: '① 合并', task_id: 'task-1' } } }, NOW)
     expect(click).toMatchObject({ text: '① 合并', addressed: 'mention', meta: { eventKey: '① 合并', taskId: 'task-1' } })
   })
 
-  it('drops images, session entry, the bot itself, assistant callbacks and a group event with no chat', () => {
-    expect(wecomTrigger(textFrame({ msgtype: 'image', text: undefined, image: { url: 'https://example.invalid/a', aeskey: 'k' } }), NOW)).toBeUndefined()
+  it('drops a picture with no url, session entry, the bot itself, assistant callbacks and a group event with no chat', () => {
+    expect(wecomTrigger(textFrame({ msgtype: 'image', text: undefined }), NOW)).toBeUndefined()
     expect(wecomTrigger({ body: { msgid: 'evt-2', from: { userid: 'boss' }, msgtype: 'event', event: { eventtype: 'enter_chat' } } }, NOW)).toBeUndefined()
     expect(wecomTrigger(textFrame({ from: { userid: 'bot-1' } }), NOW)).toBeUndefined()
     expect(wecomTrigger(textFrame({ compat_info: { source: 'ai_assistant' } }), NOW)).toBeUndefined()
@@ -201,6 +231,161 @@ describe('wecom send framing', () => {
   })
 })
 
+describe('wecom pictures', () => {
+  it('downloads and decrypts a picture, and never stores the url or aes key', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'wecom-image-'))
+    const aes = 'aes-secret-value'
+    const url = 'https://example.invalid/sop.png'
+    const parsed = wecomTrigger(textFrame({
+      msgid: 'sop-1', chatid: undefined, chattype: 'single', msgtype: 'mixed', text: undefined,
+      mixed: { msg_item: [
+        { msgtype: 'text', text: { content: '新建业务线' } },
+        { msgtype: 'image', image: { url, aeskey: aes } },
+        { msgtype: 'text', text: { content: '外贸跟单 SOP' } },
+      ] },
+    }), NOW)!
+    const seen: { url: string; aesKey?: string }[] = []
+    const trigger = await materializeWecomImages(parsed, async (got, aesKey) => {
+      seen.push({ url: got, ...(aesKey ? { aesKey } : {}) })
+      return { buffer: PNG, filename: '../../etc/passwd.png' }
+    }, directory)
+    expect(seen).toEqual([{ url, aesKey: aes }])
+    expect(trigger.text).toBe('新建业务线\n[图片 wximg_1]\n外贸跟单 SOP')
+    expect(JSON.stringify(trigger)).not.toContain(aes)
+    expect(JSON.stringify(trigger)).not.toContain(url)
+    expect(trigger.meta.pendingMedia).toBeUndefined()
+    const saved = trigger.meta.images as { key: string; file: string; mediaType: string }[]
+    expect(saved).toEqual([{ key: 'wximg_1', file: expect.stringMatching(/^wecom-images\/[a-f0-9]{32}-wximg_1\.png$/), mediaType: 'image/png' }])
+    const path = join(directory, ...saved[0]!.file.split('/'))
+    expect(await realpath(path)).toBe(join(await realpath(directory), saved[0]!.file))
+    rmSync(directory, { recursive: true, force: true })
+  })
+
+  it('keeps a caption when the picture cannot be fetched, and does not follow a non-https url', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'wecom-image-'))
+    const http = wecomTrigger(textFrame({ msgid: 'http-1', chatid: undefined, chattype: 'single', msgtype: 'image', text: undefined,
+      image: { url: 'http://example.invalid/a', aeskey: 'aes-secret-value' } }), NOW)!
+    const calls: string[] = []
+    const blocked = await materializeWecomImages(http, async () => { calls.push('called'); return { buffer: PNG } }, directory)
+    expect(calls).toEqual([])
+    expect(blocked.text).toBe(WECOM_IMAGE_MISSED)
+    expect(JSON.stringify(blocked)).not.toContain('example.invalid')
+    expect(JSON.stringify(blocked)).not.toContain('aes-secret-value')
+    const failed = wecomTrigger(textFrame({ msgid: 'fail-1', chatid: undefined, chattype: 'single', text: { content: '看这张' },
+      quote: { msgtype: 'image', image: { url: 'https://example.invalid/a', aeskey: 'aes-secret-value' } } }), NOW)!
+    const missed = await materializeWecomImages(failed, async () => { throw new Error('download failed') }, directory)
+    expect(missed.text).toBe('引用：\n（这张图片没有取到）\n看这张')
+    expect(JSON.stringify(missed)).not.toContain('aes-secret-value')
+    const huge = wecomTrigger(textFrame({ msgid: 'huge-1', chatid: undefined, chattype: 'single', msgtype: 'image', text: undefined,
+      image: { url: 'https://example.invalid/a', aeskey: 'k' } }), NOW)!
+    const over = await materializeWecomImages(huge, async () => ({ buffer: PNG }), directory, 8)
+    expect(over.text).toBe(WECOM_IMAGE_MISSED)
+    expect(over.meta.images).toBeUndefined()
+    rmSync(directory, { recursive: true, force: true })
+  })
+
+  it('treats a file as a picture only when the bytes are one', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'wecom-image-'))
+    const pngFile = wecomTrigger(textFrame({ msgid: 'file-png', chatid: undefined, chattype: 'single', msgtype: 'file', text: undefined,
+      file: { url: 'https://example.invalid/sheet', aeskey: 'k' } }), NOW)!
+    const picture = await materializeWecomImages(pngFile, async () => ({ buffer: PNG }), directory)
+    expect(picture.text).toBe('[图片 wximg_1]')
+    expect(picture.meta.images).toMatchObject([{ mediaType: 'image/png' }])
+    const pdf = wecomTrigger(textFrame({ msgid: 'file-pdf', chatid: undefined, chattype: 'single', msgtype: 'file', text: undefined,
+      file: { url: 'https://example.invalid/sheet.pdf', aeskey: 'k' } }), NOW)!
+    const note = await materializeWecomImages(pdf, async () => ({ buffer: Buffer.from('%PDF-1.4') }), directory)
+    expect(note.text).toBe(WECOM_FILE_NOTE)
+    expect(note.meta.images).toBeUndefined()
+    expect(JSON.stringify(note)).not.toContain('sheet.pdf')
+    const extra = wecomTrigger(textFrame({ msgid: 'many', chatid: undefined, chattype: 'single', msgtype: 'mixed', text: undefined, mixed: { msg_item: [
+      { msgtype: 'image', image: { url: 'https://example.invalid/1', aeskey: 'k' } },
+      { msgtype: 'image', image: { url: 'https://example.invalid/2', aeskey: 'k' } },
+      { msgtype: 'image', image: { url: 'https://example.invalid/3', aeskey: 'k' } },
+      { msgtype: 'image', image: { url: 'https://example.invalid/4', aeskey: 'k' } },
+      { msgtype: 'image', image: { url: 'https://example.invalid/5', aeskey: 'k' } },
+    ] } }), NOW)!
+    expect(extra.text).toContain(WECOM_IMAGE_EXTRA)
+    expect(extra.meta.pendingMedia).toHaveLength(4)
+    expect(JSON.stringify(extra)).not.toContain('example.invalid/5')
+    expect(imageMediaType(Uint8Array.from([0xff, 0xd8, 0xff, 0xe0]))).toBe('image/jpeg')
+    expect(imageMediaType(Buffer.from('GIF89a'))).toBe('image/gif')
+    expect(imageMediaType(Uint8Array.from([0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x45, 0x42, 0x50]))).toBe('image/webp')
+    expect(imageMediaType(Buffer.from('hello'))).toBeUndefined()
+    rmSync(directory, { recursive: true, force: true })
+  })
+
+  it('puts the picture on the BotFather turn the session actually sees', async () => {
+    const h = host()
+    const dir = join(h.deps.deployment.stateDir, 'botfactory', 'identities')
+    h.store.saveSettings(SettingsSchema.parse({
+      eval: { mode: 'auto' },
+      sources: { wecom: { enabled: true, config: { chats: [{ chatId: 'wr_team', name: '老板群' }], directMessages: true, otherChats: 'none', identitiesDir: dir } } },
+      policy: { sources: { wecom: { allowed: [{ id: 'boss', name: '老板' }] } } },
+    }))
+    const aes = 'aes-secret-value'
+    const url = 'https://example.invalid/sop.png'
+    const parsed = wecomTrigger(textFrame({
+      msgid: 'sop-2', chatid: undefined, chattype: 'single', msgtype: 'mixed', text: undefined,
+      mixed: { msg_item: [
+        { msgtype: 'text', text: { content: '新建业务线' } },
+        { msgtype: 'image', image: { url, aeskey: aes } },
+        { msgtype: 'text', text: { content: '外贸跟单 SOP' } },
+      ] },
+    }), NOW)!
+    const trigger = await materializeWecomImages(parsed, async () => ({ buffer: PNG }), h.deps.deployment.stateDir)
+    const delivered: { text: string; images: { data: Uint8Array; mediaType: string; name: string }[] }[] = []
+    let run: ((payload: { triggerId: string }, evalId: string) => Promise<void>) | undefined
+    new MasterAssessor({
+      get engine() { return h.engine }, commands: h.deps.commands, deployment: h.deps.deployment, settings: () => h.store.settings(),
+      paused: () => false, threadContext: () => undefined,
+      effects: { enqueue() {}, handle(_kind, fn) { run = fn as typeof run } },
+      deliver: async (_id, text, images) => { delivered.push({ text, images: [...images ?? []] }) },
+      candidateCard: candidate => candidateCard({
+        store: h.store, links: new TextCache(1000), commands: h.deps.commands, sources: h.sources, lifetime: new AbortController().signal,
+      }, candidate),
+    })
+    expect(h.engine.receive(trigger)).toBe('stored')
+    h.engine.evaluateDue()
+    queueWecomCompanion(h.ctx, trigger, 'stored', dir)
+    expect(h.store.receipts.waiting()).toEqual([])
+    const candidate = h.engine.candidate(trigger.id)
+    expect(candidate?.strength).toBe('explicit')
+    await run!({ triggerId: trigger.id }, candidate!.evalId)
+    expect(delivered).toHaveLength(1)
+    expect(delivered[0]!.text).toContain('[图片 wximg_1]')
+    expect(delivered[0]!.text).toContain('外贸跟单 SOP')
+    expect(delivered[0]!.text).toContain('BotFather')
+    expect(delivered[0]!.text).not.toContain(aes)
+    expect(delivered[0]!.images.map(image => ({ mediaType: image.mediaType, name: image.name }))).toEqual([{ mediaType: 'image/png', name: 'wximg_1.png' }])
+    expect(Buffer.from(delivered[0]!.images[0]!.data).equals(PNG)).toBe(true)
+    h.close()
+  })
+
+  it('downloads an image frame on the socket before the trigger is stored', async () => {
+    const h = host()
+    const socket = new FakeSocket()
+    const url = 'https://example.invalid/shot'
+    socket.files.set(url, PNG)
+    setWecomSocketFactory(() => socket)
+    process.env.WECOM_BOT_SECRET = 'super-secret'
+    const stop = new AbortController()
+    const session = track(runWecomSession(h.ctx, { botId: 'bot-1', secret: 'super-secret' }, stop.signal), stop)
+    await vi.waitFor(() => expect(socket.connected).toBe(true))
+    socket.emit('authenticated')
+    socket.emit('message.image', textFrame({ msgid: 'img-9', chatid: undefined, chattype: 'single', msgtype: 'image', text: undefined,
+      image: { url, aeskey: 'aes-secret-value' } }))
+    await vi.waitFor(() => expect(h.store.triggers.get(key('wecom', 'img-9'))?.text).toBe('[图片 wximg_1]'))
+    const stored = h.store.triggers.get(key('wecom', 'img-9'))
+    expect(JSON.stringify(stored)).not.toContain('aes-secret-value')
+    expect(JSON.stringify(stored)).not.toContain(url)
+    expect(socket.downloads).toEqual([{ url, aesKey: 'aes-secret-value' }])
+    expect(stored?.meta.images).toMatchObject([{ mediaType: 'image/png' }])
+    stop.abort()
+    await session
+    h.close()
+  })
+})
+
 describe('wecom thread context', () => {
   it('returns only the triggering message', async () => {
     const trigger = wecomTrigger(textFrame(), NOW)!
@@ -212,6 +397,26 @@ describe('wecom thread context', () => {
     expect(parent.messages).toEqual([])
     const root = await wecomThreadContext.read({} as never, trigger, 'root', undefined, {})
     expect(root.messages).toEqual(thread.messages)
+    expect(wecomThreadContext.images?.('可以合并')).toEqual([])
+  })
+
+  it('reads a stored picture by the key written into the message', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'wecom-image-'))
+    const parsed = wecomTrigger(textFrame({ msgid: 'img-read', chatid: undefined, chattype: 'single', msgtype: 'image', text: undefined,
+      image: { url: 'https://example.invalid/a', aeskey: 'k' } }), NOW)!
+    const trigger = await materializeWecomImages(parsed, async () => ({ buffer: PNG }), directory)
+    expect(wecomThreadContext.images?.(trigger.text)).toEqual(['wximg_1'])
+    const saveImage = vi.fn().mockResolvedValue({ attachmentId: 'img' })
+    const ctx = new Context()
+    ctx.reflect.provide('attachments', { saveImage, imageLimits: { maxImageBytes: 1000, maxMessageImageBytes: 1000 } })
+    ctx.reflect.provide('llm', { resolveModelInfo: vi.fn().mockResolvedValue({ inputModalities: ['text', 'image'] }) })
+    const agent = { ctx, session: { requestHeader: () => ({ config: { provider: 'p', model: 'm' } }) }, options: {} } as unknown as Agent
+    const message = { id: String(trigger.meta.messageId), text: trigger.text }
+    const read = await wecomThreadContext.image!(agent, {} as never, trigger, message, 'wximg_1', directory, new AbortController().signal)
+    expect(read).toMatchObject({ source_message_id: 'img-read', image_key: 'wximg_1', image: { attachmentId: 'img' } })
+    expect(saveImage).toHaveBeenCalledWith({ data: expect.any(Uint8Array), mediaType: 'image/png', name: 'wximg_1.png' })
+    await expect(wecomThreadContext.image!(agent, {} as never, trigger, message, 'wximg_9', directory, new AbortController().signal)).rejects.toThrow(/source message/)
+    rmSync(directory, { recursive: true, force: true })
   })
 })
 
@@ -263,7 +468,12 @@ describe('wecom connection', () => {
     socket.emit('message.text', textFrame({ msgid: 'msg-2', chatid: 'wr_other', text: { content: '别处' } }))
     await vi.waitFor(() => expect(h.receive).toHaveBeenCalledTimes(2))
     expect(await h.receive.mock.results[1]!.value).toBe('filtered')
+    expect(socket.handlers.has('message.image')).toBe(true)
+    expect(socket.handlers.has('message.file')).toBe(true)
     socket.emit('message.text', textFrame({ msgid: 'msg-3', msgtype: 'image', text: undefined }))
+    socket.emit('message.text', textFrame({ msgid: 'msg-4', text: { content: '下一句' } }))
+    await vi.waitFor(() => expect(h.receive).toHaveBeenCalledTimes(3))
+    expect(h.receive.mock.calls[2]![0].text).toBe('下一句')
     socket.emit('reconnecting', 2)
     await vi.waitFor(() => expect(h.health.wecom).toMatchObject({ state: 'error', detail: 'Reconnecting to WeCom (attempt 2)' }))
     await expect(sendWecom({ commands: h.deps.commands }, { id: 'out-2', kind: 'notice', text: '晚了',

@@ -1,10 +1,7 @@
-/** Copies wired lines into the WeCom Source settings through the loopback management API. */
+/** Points the grill at the role directory. It does not copy a role's chats onto this bot. */
 import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import type { BusinessIdentity } from './schema.ts'
-import { chatChannel } from './schema.ts'
 import { assertNoSecret } from './secrets.ts'
-import { unionChats } from './store.ts'
 
 /** Turns one bundle plugin on in a profile patch without rewriting the rest of the file. */
 export function enablePlugin(patch: string, id: string): string {
@@ -52,36 +49,31 @@ function chatRows(value: unknown): { chatId: string; name?: string }[] {
   })
 }
 
-/** The Source config after BotFather wires lines. Direct messages stay on. Secrets are dropped if they were stored. Feishu `oc_` chats are not copied onto WeCom. */
-export function mergeWecomConfig(current: unknown, identitiesDir: string, identities: readonly BusinessIdentity[]): Record<string, unknown> {
+function stripSecrets(current: unknown): Record<string, unknown> {
   const config = current && typeof current === 'object' ? { ...current as Record<string, unknown> } : {}
   for (const key of Object.keys(config)) {
     if (/secret|password|token/i.test(key)) delete config[key]
   }
-  const extra = identities.flatMap(identity => identity.scope.groups.filter(group => chatChannel(group.chatId) === 'wecom').map(group => ({
-    chatId: group.chatId, ...group.name ? { name: group.name } : {},
-  })))
-  config.chats = unionChats(chatRows(config.chats), extra)
+  return config
+}
+
+/** Direct messages stay on so the grill can talk. This bot's own chats stay as they are. A role's groups are not copied here. Secrets are dropped if they were stored. */
+export function mergeWecomConfig(current: unknown, identitiesDir: string): Record<string, unknown> {
+  const config = stripSecrets(current)
+  config.chats = chatRows(config.chats)
   config.directMessages = true
   config.identitiesDir = identitiesDir
   return config
 }
 
-/** Feishu keeps its CLI and other-chat policy. Listed `oc_` chats default to mentions. Direct messages stay on for BotFather. */
-export function mergeFeishuConfig(current: unknown, identitiesDir: string, identities: readonly BusinessIdentity[]): Record<string, unknown> {
-  const config = current && typeof current === 'object' ? { ...current as Record<string, unknown> } : {}
-  for (const key of Object.keys(config)) {
-    if (/secret|password|token/i.test(key)) delete config[key]
-  }
-  const existing = chatRows(config.chats).map(chat => {
+/** Feishu keeps its CLI, its chats, and its other-chat policy. Direct messages stay on for the grill. A role's `oc_` groups are not copied here. */
+export function mergeFeishuConfig(current: unknown, identitiesDir: string): Record<string, unknown> {
+  const config = stripSecrets(current)
+  config.chats = chatRows(config.chats).map(chat => {
     const row = Array.isArray(config.chats) ? config.chats.find(item => item && typeof item === 'object' && 'chatId' in item && item.chatId === chat.chatId) : undefined
     const listen = row && typeof row === 'object' && 'listen' in row && (row.listen === 'all' || row.listen === 'mentions') ? row.listen : 'mentions'
     return { ...chat, listen }
   })
-  const extra = identities.flatMap(identity => identity.scope.groups.filter(group => chatChannel(group.chatId) === 'feishu').map(group => ({
-    chatId: group.chatId, ...group.name ? { name: group.name } : {}, listen: group.listen ?? 'mentions' as const,
-  })))
-  config.chats = unionChats(existing, extra)
   config.directMessages = true
   config.identitiesDir = identitiesDir
   return config
@@ -89,8 +81,8 @@ export function mergeFeishuConfig(current: unknown, identitiesDir: string, ident
 
 interface SettingsBody { sources?: { id: string; revision: number; value: { enabled: boolean; config: unknown } }[] }
 
-/** Pushes chats and the identity directory. Returns a short status that never includes a secret. */
-export async function pushWecomSettings(identitiesDir: string, identities: readonly BusinessIdentity[], fetchImpl: typeof fetch = fetch): Promise<string> {
+/** Records the role directory and direct messages for the grill. Returns a short status that never includes a secret. */
+export async function pushWecomSettings(identitiesDir: string, fetchImpl: typeof fetch = fetch): Promise<string> {
   const profile = dirname(dirname(identitiesDir))
   let patch: string
   try { patch = readFileSync(join(profile, 'cordis.patch.yml'), 'utf8') } catch { return '没有找到 cordis.patch.yml，企业微信设置没改。' }
@@ -99,8 +91,8 @@ export async function pushWecomSettings(identitiesDir: string, identities: reado
   const url = `http://127.0.0.1:${port}/orchestrator/api/settings`
   let response: Response
   try { response = await fetchImpl(url, { headers, signal: AbortSignal.timeout(3000) }) }
-  catch { return '面板没开，企业微信设置还没改。身份文件已经写好。' }
-  if (!response.ok) return `面板没有返回设置（${response.status}）。身份文件已经写好。`
+  catch { return '面板没开，企业微信设置还没改。角色文件已经写好的话，在目录里，没有并到这个机器人上。' }
+  if (!response.ok) return `面板没有返回设置（${response.status}）。身份文件已经写好。没有把角色并到这个机器人上。`
   const body = await response.json() as SettingsBody
   const notes: string[] = []
   let restarting = false
@@ -109,8 +101,8 @@ export async function pushWecomSettings(identitiesDir: string, identities: reado
     const label = id === 'wecom' ? '企业微信' : '飞书'
     if (!source) { notes.push(`面板里还没有${label}来源。`); continue }
     const config = id === 'wecom'
-      ? mergeWecomConfig(source.value.config, identitiesDir, identities)
-      : mergeFeishuConfig(source.value.config, identitiesDir, identities)
+      ? mergeWecomConfig(source.value.config, identitiesDir)
+      : mergeFeishuConfig(source.value.config, identitiesDir)
     assertNoSecret(JSON.stringify(config))
     const put = await fetchImpl(`${url}/source:${id}`, {
       method: 'PUT', headers, body: JSON.stringify({ revision: source.revision, value: { enabled: true, config } }),
@@ -119,9 +111,9 @@ export async function pushWecomSettings(identitiesDir: string, identities: reado
     if (!put.ok) { notes.push(`${label}设置没有保存（${put.status}）。`); continue }
     const saved = await put.json() as { restarting?: boolean }
     restarting = restarting || saved.restarting === true
-    notes.push(`${label}已接上。`)
+    notes.push(`${label}只记下了私聊工厂的目录。`)
   }
   if (restarting) notes.push('服务正在重启。')
-  notes.push('没有新的 BotID。身份文件已经写好。')
+  notes.push('没有新建 BotID，也没有把角色并到这个机器人上。')
   return notes.join('')
 }

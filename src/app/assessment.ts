@@ -9,8 +9,10 @@ import type { Commands } from '../infra/commands.ts'
 import type { Deployment } from '../deployment.ts'
 import { admissionContext } from '../sources/admission-context.ts'
 import { readRepositoryPath } from '../sources/github-read.ts'
+import { loadWecomTurnImages } from '../sources/wecom-image.ts'
 import type { TriggerContext } from '../sources/kind.ts'
 import { relatedTickets } from './cards.ts'
+import type { DeliveryImage } from './delivery.ts'
 import { textPage } from './context.ts'
 import { AcknowledgementSchema } from './tools/tool.ts'
 import type { Effects } from './effects.ts'
@@ -59,7 +61,7 @@ export interface AssessorHost {
   /** Thread context reader for `trigger`'s Source, or `undefined` when the Source has none. */
   threadContext(trigger: Trigger): TriggerContext | undefined
   /** Delivers a candidate card to the main Session once per request ID, resolving after the Session receives it. */
-  deliver(requestId: string, text: string): Promise<void>
+  deliver(requestId: string, text: string, images?: readonly DeliveryImage[]): Promise<void>
   candidateCard(candidate: Candidate): Promise<Record<string, unknown>>
 }
 
@@ -96,7 +98,9 @@ export class MasterAssessor implements Assessor {
     host.effects.handle('assessment', async ({ triggerId }, evalId) => {
       const candidate = this.host.engine.candidate(triggerId)
       if (candidate?.evalId !== evalId) return
-      await this.host.deliver(`candidate:${evalId}`, JSON.stringify({ kind: 'candidate', ...await this.host.candidateCard(candidate) }))
+      // An explicit direct message is not assessed with orchestrator_eval_read, so a picture has to ride on this turn.
+      const images = await loadWecomTurnImages(candidate.triggers, this.host.deployment.stateDir)
+      await this.host.deliver(`candidate:${evalId}`, JSON.stringify({ kind: 'candidate', ...await this.host.candidateCard(candidate) }), images)
       this.host.engine.candidateDelivered(evalId)
     }, { limit: () => host.paused() ? 0 : 4 })
   }

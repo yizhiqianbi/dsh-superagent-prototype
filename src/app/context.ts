@@ -21,6 +21,8 @@ export const teamDefaults = {
 }
 
 export const mainAdmissionPolicy = promptFile('admission')
+/** Orchestrator-only. The session talks through a business line; this does not script the questions. */
+export const botfatherPrompt = promptFile('botfather')
 
 const handoff = { shared: promptFile('handoff'), orchestrator: promptFile('handoff-orchestrator'), worker: promptFile('handoff-worker') }
 export const handoffPolicy = (role: 'orchestrator' | 'worker'): string => `${handoff.shared}\n${handoff[role]}`

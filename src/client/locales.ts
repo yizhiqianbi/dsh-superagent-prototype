@@ -458,6 +458,7 @@ const TEXT = {
   unsaved: ['未保存', 'Unsaved'],
   promptsDraftVersion: ['未保存 · 基于版本 {revision}', 'Unsaved · based on version {revision}'],
   'promptPart.runtime/admission': ['主 Session 接单约束', 'Main Session accept constraints'],
+  'promptPart.runtime/botfather': ['业务线', 'Business line'],
   'promptPart.runtime/policy': ['策略与启用的规则', 'Policy and enabled rules'],
   'promptPart.runtime/handoff/orchestrator': ['工单交付与人工确认（主 Session）', 'Ticket handoff and human confirmation (main Session)'],
   'promptPart.runtime/handoff/worker': ['工单交付与人工确认（执行器）', 'Ticket handoff and human confirmation (Executor)'],

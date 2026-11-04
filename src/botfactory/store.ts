@@ -1,26 +1,18 @@
-/** Identity files, BotFather drafts, and the chats a line adds beside the Source form. */
+/** Identity files, an open BotFather conversation, and the role package written beside them. */
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { WECOM_ID } from '../sources/wecom-trigger.ts'
-import { companionFragment } from './grill.ts'
-import { BotfatherRouteSchema, BusinessIdentitySchema, DEFAULT_ROUTE, GrillDraftSchema, chatChannel, type BusinessIdentity, type GrillDraft } from './schema.ts'
+import { companionFragment, roleNote } from './grill.ts'
+import { BotfatherRouteSchema, BusinessIdentitySchema, DEFAULT_ROUTE, FactoryDraftSchema, type BusinessIdentity, type FactoryDraft } from './schema.ts'
 import { assertNoSecret } from './secrets.ts'
 import { dumpYaml, parseYaml } from './yaml.ts'
 
 export interface FactoryLibrary {
   identities(): BusinessIdentity[]
   route(): { ok: true; operators: string[] } | { ok: false }
-  draft(userid: string): GrillDraft | undefined
-  saveDraft(userid: string, draft: GrillDraft | null): void
+  draft(userid: string): FactoryDraft | undefined
+  saveDraft(userid: string, draft: FactoryDraft | null): void
   saveIdentity(identity: BusinessIdentity): void
-}
-
-export function unionChats<T extends { chatId: string }>(configured: readonly T[], extra: readonly T[]): T[] {
-  const chats = configured.map(chat => ({ ...chat }))
-  for (const chat of extra) {
-    if (!chats.some(item => item.chatId === chat.chatId)) chats.push({ ...chat })
-  }
-  return chats
 }
 
 /** Parses one identity file. A credential assignment is refused before the text is kept. */
@@ -34,26 +26,6 @@ function document(text: string): unknown {
   const trimmed = text.trim()
   if (trimmed.startsWith('{')) return JSON.parse(trimmed) as unknown
   return parseYaml(text)
-}
-
-/** Group chats named by identity files. `oc_` ids belong to Feishu; the rest belong to WeCom. A file that does not parse is skipped. */
-export function identityGroupChats(dir: string): { chatId: string; name?: string }[] {
-  return identityChats(dir, 'wecom').map(({ chatId, name }) => ({ chatId, ...name ? { name } : {} }))
-}
-
-export function identityFeishuChats(dir: string): { chatId: string; name?: string; listen: 'mentions' | 'all' }[] {
-  return identityChats(dir, 'feishu').map(group => ({
-    chatId: group.chatId, ...group.name ? { name: group.name } : {}, listen: group.listen ?? 'mentions',
-  }))
-}
-
-function identityChats(dir: string, channel: 'wecom' | 'feishu'): { chatId: string; name?: string; listen?: 'mentions' | 'all' }[] {
-  if (!dir) return []
-  try {
-    return unionChats([], loadIdentities(dir).flatMap(identity => identity.scope.groups.filter(group => chatChannel(group.chatId) === channel)))
-  } catch {
-    return []
-  }
 }
 
 export function loadIdentities(dir: string): BusinessIdentity[] {
@@ -101,7 +73,7 @@ export function openFactory(identitiesDir: string): FactoryLibrary {
     draft(userid) {
       const path = draftPath(drafts, userid)
       if (!path) return undefined
-      try { return GrillDraftSchema.parse(JSON.parse(readFileSync(path, 'utf8')) as unknown) } catch { return undefined }
+      try { return FactoryDraftSchema.parse(JSON.parse(readFileSync(path, 'utf8')) as unknown) } catch { return undefined }
     },
     saveDraft(userid, draft) {
       const path = draftPath(drafts, userid)
@@ -111,11 +83,14 @@ export function openFactory(identitiesDir: string): FactoryLibrary {
       writeFileSync(path, `${JSON.stringify(draft, null, 2)}\n`)
     },
     saveIdentity(identity) {
+      const roles = join(root, 'roles')
       mkdirSync(identitiesDir, { recursive: true })
       mkdirSync(companions, { recursive: true })
+      mkdirSync(roles, { recursive: true })
       const body = dumpYaml(identity)
       writeFileSync(join(identitiesDir, `${identity.id}.yml`), body)
       writeFileSync(join(companions, `${identity.id}.md`), companionFragment(identity))
+      writeFileSync(join(roles, `${identity.id}.md`), roleNote(identity))
     },
   }
 }

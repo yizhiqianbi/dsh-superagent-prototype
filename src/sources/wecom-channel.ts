@@ -11,11 +11,10 @@ const GREETING = /^(?:你好|您好|嗨|hi|hello|hey|在吗|在么|早上好|下
 export const WECOM_GREETING = '在的。跟单、催办、到账确认这类事直接说就行。'
 export const WECOM_RECEIVED = '收到。具体要办的事（客户/订单/节点）说一下，我帮你盯着推进；需要你拍板的我会先把选项列好。'
 
-/** One short companion line. It does not name a customer, an order, or a decision. */
-/** A greeting uses the wired line's smoke text when exactly one line owns the chat. Other chat stays the shared received line. */
-export function wecomCompanionText(text: string, smoke?: string): string {
+/** One short companion line. It does not name a customer, an order, or a decision. A saved role does not replace it. */
+export function wecomCompanionText(text: string): string {
   if (!GREETING.test(text.trim())) return WECOM_RECEIVED
-  return smoke || WECOM_GREETING
+  return WECOM_GREETING
 }
 
 /**

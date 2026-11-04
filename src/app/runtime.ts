@@ -132,7 +132,8 @@ export class Runtime extends Service implements SourceHost {
         repliedTo: trigger => repliedTo({ store, sources }, trigger) })
       this.assessor = new MasterAssessor({ get engine() { return runtime.engine }, commands, get deployment() { return setup.deployment }, effects,
         settings: () => store.settings(), paused: () => this.paused(), threadContext: trigger => sources.threadContext(trigger),
-        deliver: (id, text) => sessions.prompt(masterId, id, text, 'steer'), candidateCard: candidate => candidateCard(links, candidate) })
+        deliver: (id, text, images) => sessions.prompt(masterId, id, text, 'steer', undefined, undefined, images),
+        candidateCard: candidate => candidateCard(links, candidate) })
       const outbox = this.outbox = new Outbox({ store, effects, sources, commands, paused: () => this.paused() })
       const { assessor, executor } = this
       const policy = () => settingsPolicy(store.settings(), sources)
@@ -163,7 +164,7 @@ export class Runtime extends Service implements SourceHost {
         get setupProblem() { return setup.problem }, get feishuProblem() { return setup.feishuProblem }, receive: trigger => passes.receive(trigger) }
       this.toolHost = { context: ctx, engine, store, prompts, sessions, settings: this.settings, assessor, resources,
         get github() { return runtime.context({ kind: 'github', health: ['github'] }) },
-        requestPass: () => { passes.request() }, sendReplies: () => outbox.sent(),
+        requestPass: () => { passes.request() }, sendReplies: () => outbox.sent(), send: message => outbox.send(message),
         quietly: run => { this.quiet++; try { return run() } finally { this.quiet-- } } }
       this.ready = this.initialize()
     } catch (error) {

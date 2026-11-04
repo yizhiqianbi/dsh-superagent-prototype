@@ -1,6 +1,8 @@
 /** Thread window for a WeCom trigger. The long connection has no history API, so this does not invent earlier messages. */
 import type { Commands } from '../infra/commands.ts'
 import type { Trigger } from '../core/index.ts'
+import { readWecomImage } from './wecom-image.ts'
+import { wecomImageKeys } from './wecom-trigger.ts'
 import type { ContextMessage, ContextPart, ContextPartName, ThreadContext } from './kind.ts'
 
 const HONEST = 'WeCom long connection keeps no history; only the triggering message is known.'
@@ -19,4 +21,6 @@ export const wecomThreadContext: ThreadContext<Record<string, unknown>> = {
     const unreachable: never = part
     throw new Error(`Unknown WeCom thread part ${String(unreachable)}`)
   },
+  images: wecomImageKeys,
+  image: (agent, _commands, trigger, message, imageKey, stateDir, signal) => readWecomImage(agent, trigger, message, imageKey, stateDir, signal),
 }

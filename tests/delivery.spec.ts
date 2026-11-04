@@ -3,7 +3,7 @@ import type { Agent } from '@deepseek-ai/dsh-agent'
 import { createUserMessage, type UserMessage } from '@deepseek-ai/dsh-llm'
 import { SessionId, SessionSeq, type SessionEvent } from '@deepseek-ai/dsh-session'
 import { expect, it, vi } from 'vitest'
-import { AgentDelivery } from '../src/app/delivery.ts'
+import { AgentDelivery, type DeliveryImage } from '../src/app/delivery.ts'
 
 function fixture(history: UserMessage[] = []) {
   const ctx = new Context()
@@ -23,7 +23,8 @@ function fixture(history: UserMessage[] = []) {
   ctx.reflect.provide('sessionPersistence', { open, flush })
   const delivery = new AgentDelivery(ctx)
   const signal = new AbortController()
-  const send = (id = 'request', mode: 'queue' | 'steer' = 'steer') => delivery.send(agent, id, '{"event_id":"event"}', mode, signal.signal)
+  const send = (id = 'request', mode: 'queue' | 'steer' = 'steer', images: readonly DeliveryImage[] = []) =>
+    delivery.send(agent, id, '{"event_id":"event"}', mode, signal.signal, undefined, undefined, images)
   const inject = (id: string, summary: string) => delivery.send(agent, id, '{"settings_saved":"policy"}', { inject: summary }, signal.signal)
   const holds = (id: string) => delivery.holds(agent, id)
   const consume = (message: UserMessage) => {
@@ -132,6 +133,34 @@ it('injects a notice once, as dsh-superagent\'s notice with its summary, without
   expect(f.injected).toHaveBeenCalledOnce()
   expect(f.injected.mock.calls[0]![0]).toMatchObject({ role: 'user', source: { kind: 'dsh-superagent', form: 'notice', summary: 'Settings saved' } })
   expect([f.steer, f.followup].map(spy => spy.mock.calls.length)).toEqual([0, 0])
+})
+
+it('steers an image beside the text, and skips it when the model declares text only', async () => {
+  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47])
+  const ref = { attachmentId: 'img', mediaType: 'image/png' as const, bytes: png.byteLength, width: 1, height: 1 }
+  const image: DeliveryImage = { data: png, mediaType: 'image/png', name: 'wximg_1.png' }
+  const saveImage = vi.fn(async () => ref)
+  const f = fixture()
+  const ctx = new Context()
+  ctx.reflect.provide('attachments', { saveImage })
+  Object.assign(f.agent, { ctx, options: {} })
+  await f.send('request', 'steer', [image])
+  expect(saveImage).toHaveBeenCalledWith({ data: png, mediaType: 'image/png', name: 'wximg_1.png' })
+  expect(f.steer.mock.calls[0]![0].content).toEqual([
+    { type: 'text', text: '{"event_id":"event"}' },
+    { type: 'image', attachment: ref },
+  ])
+  const textOnly = fixture()
+  const skipped = vi.fn(async () => ref)
+  const quiet = new Context()
+  quiet.reflect.provide('attachments', { saveImage: skipped })
+  quiet.reflect.provide('llm', { resolveModelInfo: async () => ({ inputModalities: ['text'] }) })
+  Object.assign(textOnly.agent, {
+    ctx: quiet, options: { provider: 'p', model: 'm' }, session: { requestHeader: () => ({ config: { provider: 'p', model: 'm' } }) },
+  })
+  await textOnly.send('request', 'steer', [image])
+  expect(skipped).not.toHaveBeenCalled()
+  expect(textOnly.steer.mock.calls[0]![0].content).toEqual([{ type: 'text', text: '{"event_id":"event"}' }])
 })
 
 it('tells whether the Session holds a message: one waiting in its inbox, one it took, and one in its stored history', async () => {
