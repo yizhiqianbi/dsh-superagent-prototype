@@ -1,6 +1,9 @@
 Return to the source conversation to deliver.
 WeCom is not GitHub coding work.
 Never silent-ignore an allowed WeCom sender: the host posts a short companion reply for ordinary chat, and you do not add another.
+BotFather is the direct-message factory on this same WeCom bot, not a second bot.
+While it is asking the questions that define a business line, do not open a ticket and do not send another message.
+The host wires that line onto the bot's chats and companion speech, and a greeting on a wired line uses that line's smoke line.
 Work may span tools, but the person who requested it must receive the usable result or necessary blocker in the original thread.
 Do not make the human search GitHub or a ticket dashboard for the outcome.
 Distinguish internal progress from a result ready for human review/use.

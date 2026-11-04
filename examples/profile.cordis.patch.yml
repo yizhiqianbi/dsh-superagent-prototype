@@ -11,5 +11,6 @@
 # - id: dsh-superagent-feishu
 #   disabled: false
 # WeCom is optional: uncomment to enable its Source, put the Secret in WECOM_BOT_SECRET, and follow SETUP.md.
+# BotFather is a direct-message factory on that same bot (docs/010-botfactory.md), not a second BotID.
 # - id: dsh-superagent-wecom
 #   disabled: false

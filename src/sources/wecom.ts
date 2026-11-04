@@ -2,6 +2,10 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { setTimeout as delay } from 'node:timers/promises'
 import { z } from 'zod'
+import { planCompanion } from '../botfactory/companion.ts'
+import { SAVE_FAILED } from '../botfactory/grill.ts'
+import { pushWecomSettings } from '../botfactory/settings.ts'
+import { identityGroupChats, openFactory, unionChats } from '../botfactory/store.ts'
 import { key, threadKey, type ReceiveResult, type Trigger } from '../core/index.ts'
 import { health, sourceContext, type SourceContext } from './host.ts'
 import type { SourceKind } from './kind.ts'
@@ -25,6 +29,7 @@ const WecomConfigSchema = z.object({
   chats: z.array(ChatSchema).refine(chats => new Set(chats.map(chat => chat.chatId)).size === chats.length, 'Duplicate chat IDs').default([]),
   directMessages: z.boolean().default(true),
   otherChats: z.enum(['none', 'mentions']).default('none'),
+  identitiesDir: z.string().trim().max(400).refine(value => value === '' || value.startsWith('/'), 'An absolute path, or empty').default(''),
 }).strict()
 export type WecomConfig = z.infer<typeof WecomConfigSchema>
 
@@ -61,13 +66,16 @@ export const wecomKind: SourceKind<WecomConfig> = {
     { key: 'otherChats', type: 'select', label: { zh: '其他群', en: 'Other chats' },
       options: [{ value: 'none', label: { zh: '不接收', en: 'Not received' } }, { value: 'mentions', label: { zh: '接收 @', en: 'Mentions' } }],
       hint: { zh: '没有列在上面的群。企业微信本来就只推送 @ 机器人的消息。', en: 'Chats that are not listed above. WeCom already pushes only messages that mention the bot.' } },
-    { key: 'directMessages', type: 'switch', label: { zh: '接收私聊', en: 'Direct messages' } },
+    { key: 'directMessages', type: 'switch', label: { zh: '接收私聊', en: 'Direct messages' },
+      hint: { zh: 'BotFather 在私聊里开业务线，用的是这同一个机器人。关掉就收不到私聊。', en: 'BotFather starts business lines in direct messages on this same bot. Off means direct messages are not received.' } },
+    { key: 'identitiesDir', type: 'text', advanced: true, label: { zh: '业务线目录', en: 'Business-line directory' },
+      hint: { zh: 'BotFather 写业务线身份的目录，一般是配置里的 botfactory/identities。留空则不读。不是第二个 BotID。', en: 'Directory where BotFather writes business-line identities, usually botfactory/identities in the profile. Empty reads none. This is not a second BotID.' } },
   ],
   health: ['wecom'],
   scope({ meta }, config) {
     if (meta.direct === true) return config.directMessages ? { listened: true, observed: false, row: 'direct' } : { listened: false, reason: 'direct_messages_not_allowed' }
     const chatId = String(meta.chatId ?? '')
-    const chat = config.chats.find(item => item.chatId === chatId)
+    const chat = unionChats(config.chats, identityGroupChats(config.identitiesDir)).find(item => item.chatId === chatId)
     if (chat) return { listened: true, observed: false, row: chat.chatId }
     return config.otherChats === 'mentions' ? { listened: true, observed: false, row: 'other' } : { listened: false, reason: 'chat_not_allowed' }
   },
@@ -91,8 +99,9 @@ export const wecomKind: SourceKind<WecomConfig> = {
     rows(stored) {
       const config = WecomConfigSchema.parse(stored)
       const mentions = { zh: '仅 @', en: '@ only' }
+      const chats = unionChats(config.chats, identityGroupChats(config.identitiesDir))
       return [
-        ...config.chats.map(chat => ({ id: chat.chatId, label: chat.name || chat.chatId, note: mentions,
+        ...chats.map(chat => ({ id: chat.chatId, label: chat.name || chat.chatId, note: mentions,
           cells: { listedUnaddressed: false, unlistedAddressed: true, unlistedUnaddressed: false } })),
         { id: 'other', label: { zh: '其他群', en: 'Other chats' }, note: config.otherChats === 'mentions' ? mentions : { zh: '不接收', en: 'Not received' },
           cells: { listedUnaddressed: false, unlistedAddressed: config.otherChats === 'mentions', unlistedUnaddressed: false } },
@@ -105,10 +114,12 @@ export const wecomKind: SourceKind<WecomConfig> = {
     variables: [
       { key: 'DSH_SUPERAGENT_WECOM_BOT', description: { zh: '企业微信机器人的 BotID；未配置时为空', en: 'WeCom bot BotID; empty when it is not configured' } },
       { key: 'DSH_SUPERAGENT_WECOM_CHAT', description: { zh: '接下工单的企业微信会话；工单不是从企业微信来的时为空', en: 'WeCom chat that started the ticket; empty when the ticket did not start on WeCom' } },
+      { key: 'DSH_SUPERAGENT_WECOM_IDENTITIES', description: { zh: 'BotFather 写在这一个机器人上的业务线目录；没接线时为空。旁边 companions 是每条线的说法。BotFather 只在私聊里开线，不是第二个 BotID。', en: 'Directory of business lines BotFather wrote on this one bot; empty when none are wired. Companion fragments sit beside it. BotFather is direct messages only and is not a second BotID.' } },
     ],
     values: ({ config, trigger }) => ({
       DSH_SUPERAGENT_WECOM_BOT: config.botId,
       DSH_SUPERAGENT_WECOM_CHAT: trigger?.source === SOURCE ? String(trigger.meta.chatId ?? '') : '',
+      DSH_SUPERAGENT_WECOM_IDENTITIES: config.identitiesDir,
     }),
   },
 }
@@ -169,17 +180,29 @@ function still(ctx: SourceContext, creds: WecomCredentials): boolean {
  * Queues the companion notice after a listened message is recorded. A filtered chat is not replied to.
  * An acknowledgement already queued for this trigger, or this notice itself, is left as it is.
  */
-export function queueWecomCompanion(ctx: Pick<SourceContext, 'notify' | 'outboundStatus'>, trigger: Trigger, result: ReceiveResult): void {
+export function queueWecomCompanion(ctx: Pick<SourceContext, 'notify' | 'outboundStatus'>, trigger: Trigger, result: ReceiveResult,
+  identitiesDir = '', push = false): void {
   if (result === 'filtered') return
-  const notice = wecomCompanionNotice(trigger)
+  const library = identitiesDir ? openFactory(identitiesDir) : undefined
+  const plan = planCompanion(trigger, library)
+  if (!plan) return
+  const notice = wecomCompanionNotice(trigger, plan.text)
   if (!notice || ctx.outboundStatus(notice.id) || ctx.outboundStatus(key('ack', trigger.id))) return
-  ctx.notify(notice)
+  let message = notice
+  if (plan.commit) {
+    try { plan.commit() } catch { message = { ...notice, text: SAVE_FAILED } }
+  }
+  ctx.notify(message)
+  if (push && plan.wired && identitiesDir && message.text !== SAVE_FAILED) {
+    void pushWecomSettings(identitiesDir, library?.identities() ?? []).catch(() => { /* The identity file is already the listen list. */ })
+  }
 }
 
 function describe(ctx: SourceContext, trigger: { meta: Record<string, unknown>; threads: { source: string; id: string }[] }): void {
   const config = enabled(ctx)
   const chatId = String(trigger.meta.chatId ?? '')
-  const named = config?.chats.find(chat => chat.chatId === chatId)?.name
+  const chats = config ? unionChats(config.chats, identityGroupChats(config.identitiesDir)) : []
+  const named = chats.find(chat => chat.chatId === chatId)?.name
   const direct = trigger.meta.direct === true
   const chat = direct ? { value: { zh: '私聊', en: 'Direct message' } } : { value: named || chatId }
   for (const ref of trigger.threads) ctx.threads.describe(threadKey(ref), { ...direct ? {} : { label: named || chatId }, facts: { chat } })
@@ -199,7 +222,7 @@ export async function runWecomSession(ctx: SourceContext, creds: WecomCredential
       if (!trigger) return
       const result = await ctx.receive(trigger)
       describe(ctx, trigger)
-      queueWecomCompanion(ctx, trigger, result)
+      queueWecomCompanion(ctx, trigger, result, enabled(ctx)?.identitiesDir ?? '', true)
     }).catch((error: unknown) => { ctx.report('wecom', { state: 'error', detail: String(error) }) })
   }
   try {
