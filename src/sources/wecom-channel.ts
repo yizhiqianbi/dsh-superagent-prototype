@@ -1,10 +1,29 @@
 /** WeCom outbound frames: markdown, or a button card when a short gate report has numbered options. */
-import type { OutboundMessage } from '../core/index.ts'
+import { key, type OutboundMessage, type Trigger } from '../core/index.ts'
 import { checkedImText } from '../infra/text.ts'
 import type { SourceContext } from './host.ts'
 import type { ChannelLink } from './kind.ts'
 import { currentWecomSend } from './wecom-socket.ts'
-import { gateOptions, wecomTriggerId } from './wecom-trigger.ts'
+import { SOURCE, gateOptions, wecomTriggerId } from './wecom-trigger.ts'
+
+/** A greeting and nothing else. Anything with a request stays on the ordinary received line. */
+const GREETING = /^(?:你好|您好|嗨|hi|hello|hey|在吗|在么|早上好|下午好|晚上好)[!！。.~～\s]*$/i
+export const WECOM_GREETING = '在的，有闸门或跟单事项直接说。'
+export const WECOM_RECEIVED = '收到了。要决定的事直接说。'
+
+/** One short companion line. It names no business fact. */
+export function wecomCompanionText(text: string): string {
+  return GREETING.test(text.trim()) ? WECOM_GREETING : WECOM_RECEIVED
+}
+
+/**
+ * The companion notice for one trigger. Its id is the trigger id, so a repeated msgid and an Outbox retry stay one message.
+ * It is not the ticket acknowledgement (`ack`), which Eval may queue later for real work.
+ */
+export function wecomCompanionNotice(trigger: Trigger): OutboundMessage | undefined {
+  if (trigger.source !== SOURCE || !trigger.channel) return undefined
+  return { id: key('wecom-notice', trigger.id), channel: trigger.channel, text: wecomCompanionText(trigger.text), kind: 'notice' }
+}
 
 /** Title, detail and button lengths WeCom's button card actually displays. Longer reports stay markdown. */
 const TITLE_MAX = 26

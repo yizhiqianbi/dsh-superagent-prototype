@@ -16,6 +16,7 @@ Use this when enabling the WeCom Source. The host already delivers replies on th
 ## What the connection can do
 
 - Inbound text, a voice transcript, mixed text, and a template-card button click become Triggers. A group message is a mention. A direct message is direct. The long connection does not deliver other group messages.
+- Each recorded text or card click also queues one short notice on that same chat, even when Eval ignores it and opens no ticket. A greeting is 「在的，有闸门或跟单事项直接说。」 Other chat is 「收到了。要决定的事直接说。」 The same msgid does not send it twice, and an acknowledgement already queued for that trigger is left alone.
 - An image, a file, or a video alone is not a Trigger. There is no history API, so an assessment sees the triggering message and nothing before it.
 - Outbound text goes out as markdown on `aibot_send_msg`. A short report whose body fits a card and which has at least two lines such as `① 合并` and `② 再看` goes out as a button card. The click comes back as that line.
 - The boss has to message the bot once before a proactive report can reach that chat. A lost acknowledgement can deliver the same report twice: WeCom does not accept this host's message id as an idempotency key.

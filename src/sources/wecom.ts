@@ -2,10 +2,10 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { setTimeout as delay } from 'node:timers/promises'
 import { z } from 'zod'
-import { threadKey } from '../core/index.ts'
+import { key, threadKey, type ReceiveResult, type Trigger } from '../core/index.ts'
 import { health, sourceContext, type SourceContext } from './host.ts'
 import type { SourceKind } from './kind.ts'
-import { sendWecom, wecomLink } from './wecom-channel.ts'
+import { sendWecom, wecomCompanionNotice, wecomLink } from './wecom-channel.ts'
 import { wecomThreadContext } from './wecom-read.ts'
 import { acquireWecomBot, bindWecomSend, createWecomSocket, wecomAuthFailed, type WecomCredentials, type WecomSocket } from './wecom-socket.ts'
 import { SOURCE, WECOM_ID, wecomTrigger } from './wecom-trigger.ts'
@@ -165,6 +165,17 @@ function still(ctx: SourceContext, creds: WecomCredentials): boolean {
   return !!next && next.botId === creds.botId && next.secret === creds.secret
 }
 
+/**
+ * Queues the companion notice after a listened message is recorded. A filtered chat is not replied to.
+ * An acknowledgement already queued for this trigger, or this notice itself, is left as it is.
+ */
+export function queueWecomCompanion(ctx: Pick<SourceContext, 'notify' | 'outboundStatus'>, trigger: Trigger, result: ReceiveResult): void {
+  if (result === 'filtered') return
+  const notice = wecomCompanionNotice(trigger)
+  if (!notice || ctx.outboundStatus(notice.id) || ctx.outboundStatus(key('ack', trigger.id))) return
+  ctx.notify(notice)
+}
+
 function describe(ctx: SourceContext, trigger: { meta: Record<string, unknown>; threads: { source: string; id: string }[] }): void {
   const config = enabled(ctx)
   const chatId = String(trigger.meta.chatId ?? '')
@@ -186,8 +197,9 @@ export async function runWecomSession(ctx: SourceContext, creds: WecomCredential
       if (signal.aborted || !enabled(ctx)) return
       const trigger = wecomTrigger(frame)
       if (!trigger) return
-      await ctx.receive(trigger)
+      const result = await ctx.receive(trigger)
       describe(ctx, trigger)
+      queueWecomCompanion(ctx, trigger, result)
     }).catch((error: unknown) => { ctx.report('wecom', { state: 'error', detail: String(error) }) })
   }
   try {

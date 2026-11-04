@@ -10,10 +10,10 @@ import { HealthBoard } from '../src/infra/health.ts'
 import { SettingsSchema, settingsPolicy } from '../src/policy.ts'
 import { sourceContextOf, type SourceContextDeps } from '../src/app/source-context.ts'
 import { Store } from '../src/app/store.ts'
-import { sendWecom, wecomGone, wecomLink, wecomOutbound, wecomTaskId, type WecomOutbound } from '../src/sources/wecom-channel.ts'
+import { WECOM_GREETING, WECOM_RECEIVED, sendWecom, wecomCompanionNotice, wecomCompanionText, wecomGone, wecomLink, wecomOutbound, wecomTaskId, type WecomOutbound } from '../src/sources/wecom-channel.ts'
 import { wecomThreadContext } from '../src/sources/wecom-read.ts'
 import { acquireWecomBot, bindWecomSend, resetWecomRuntime, setWecomSocketFactory, type WecomSocket } from '../src/sources/wecom-socket.ts'
-import { apply as applyWecom, runWecomSession, watchWecom, WECOM_CREDENTIALS, wecomCredentials, wecomKind, wecomRetry } from '../src/sources/wecom.ts'
+import { apply as applyWecom, queueWecomCompanion, runWecomSession, watchWecom, WECOM_CREDENTIALS, wecomCredentials, wecomKind, wecomRetry } from '../src/sources/wecom.ts'
 import { wecomTime, wecomTrigger } from '../src/sources/wecom-trigger.ts'
 import { SourceRegistry } from '../src/sources/registry.ts'
 import { testDeployment } from './fixtures/deployment.ts'
@@ -79,7 +79,7 @@ function host(enabled = true) {
   const deployment = testDeployment()
   const commands = new Commands(() => deployment, {}, new AbortController().signal)
   const receive = vi.fn((trigger: Trigger) => { const result = engine.receive(trigger); engine.evaluateDue(); return result })
-  const deps: SourceContextDeps = { store, engine, outbox: { send: message => { store.receipts.add(message) } }, commands, sources, deployment,
+  const deps: SourceContextDeps = { store, engine, outbox: { send: message => { store.receipts.add(message) }, status: id => store.receipts.get(id)?.status }, commands, sources, deployment,
     ready: Promise.resolve(), configured: () => true, receive }
   const close = () => { store.close(); rmSync(directory, { recursive: true, force: true }) }
   return { store, engine, sources, receive, health: board.all, ctx: sourceContextOf(deps, wecomKind), close, deps }
@@ -211,6 +211,30 @@ describe('wecom thread context', () => {
   })
 })
 
+describe('wecom companion', () => {
+  it('uses one greeting line or one received line, and does not queue a second notice', () => {
+    expect(wecomCompanionText('你好')).toBe(WECOM_GREETING)
+    expect(wecomCompanionText('  Hello! ')).toBe(WECOM_GREETING)
+    expect(wecomCompanionText('有业务')).toBe(WECOM_RECEIVED)
+    expect(wecomCompanionText('找老板')).toBe(WECOM_RECEIVED)
+    expect(wecomCompanionText('你好，把按钮改成保存')).toBe(WECOM_RECEIVED)
+    const hello = wecomTrigger(textFrame({ msgid: 'hi-1', chatid: undefined, chattype: 'single', text: { content: '你好' } }), NOW)!
+    const notice = wecomCompanionNotice(hello)
+    expect(notice).toMatchObject({ id: key('wecom-notice', hello.id), kind: 'notice', text: WECOM_GREETING, channel: hello.channel })
+    const h = host()
+    queueWecomCompanion(h.ctx, hello, 'filtered')
+    expect(h.store.receipts.get(notice!.id)).toBeUndefined()
+    queueWecomCompanion(h.ctx, hello, 'stored')
+    queueWecomCompanion(h.ctx, hello, 'duplicate')
+    expect(h.store.receipts.waiting().filter(item => item.id === notice!.id)).toEqual([expect.objectContaining({ text: WECOM_GREETING, kind: 'notice' })])
+    const vague = wecomTrigger(textFrame({ msgid: 'biz-1', chatid: undefined, chattype: 'single', text: { content: '有业务' } }), NOW)!
+    h.store.receipts.add({ id: key('ack', vague.id), channel: vague.channel!, text: '已经回过', kind: 'acknowledgement' })
+    queueWecomCompanion(h.ctx, vague, 'stored')
+    expect(h.store.receipts.get(key('wecom-notice', vague.id))).toBeUndefined()
+    h.close()
+  })
+})
+
 describe('wecom connection', () => {
   it('authenticates one socket, takes a boss message, and refuses a second socket for the same bot', async () => {
     const h = host()
@@ -276,6 +300,38 @@ describe('wecom connection', () => {
     expect(wecomRetry(undefined, 10)).toBe(1000)
     expect(wecomRetry(1000, 10)).toBe(2000)
     expect(wecomRetry(1000, 60_000)).toBe(1000)
+    h.close()
+  })
+
+  it('posts one companion notice for a direct greeting and for a card click', async () => {
+    const h = host()
+    const socket = new FakeSocket()
+    setWecomSocketFactory(() => socket)
+    process.env.WECOM_BOT_SECRET = 'super-secret'
+    const stop = new AbortController()
+    const session = track(runWecomSession(h.ctx, { botId: 'bot-1', secret: 'super-secret' }, stop.signal), stop)
+    await vi.waitFor(() => expect(socket.connected).toBe(true))
+    socket.emit('authenticated')
+    await vi.waitFor(() => expect(h.health.wecom?.state).toBe('ready'))
+    const hello = textFrame({ msgid: 'hi-1', chatid: undefined, chattype: 'single', text: { content: '你好' } })
+    socket.emit('message.text', hello)
+    const helloId = key('wecom-notice', wecomTrigger(hello, NOW)!.id)
+    await vi.waitFor(() => expect(h.store.receipts.get(helloId)).toMatchObject({
+      kind: 'notice', text: WECOM_GREETING, channel: { address: { chatId: 'boss', chatType: 'single' } },
+    }))
+    socket.emit('message.text', hello)
+    await vi.waitFor(() => expect(h.receive).toHaveBeenCalledTimes(2))
+    expect(await h.receive.mock.results[1]!.value).toBe('duplicate')
+    expect(h.store.receipts.waiting().filter(item => item.id === helloId)).toHaveLength(1)
+    const click = { body: { msgid: 'evt-9', chattype: 'single', from: { userid: 'boss' }, msgtype: 'event',
+      event: { eventtype: 'template_card_event', event_key: '① 合并', task_id: 'task-9' } } }
+    socket.emit('event.template_card_event', click)
+    const clickId = key('wecom-notice', wecomTrigger(click, NOW)!.id)
+    await vi.waitFor(() => expect(h.store.receipts.get(clickId)?.text).toBe(WECOM_RECEIVED))
+    expect(await h.receive.mock.results[2]!.value).toBe('stored')
+    expect(h.store.triggers.get(wecomTrigger(click, NOW)!.id)?.text).toBe('① 合并')
+    stop.abort()
+    await session
     h.close()
   })
 
