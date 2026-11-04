@@ -37,7 +37,11 @@ DM the bot `新建业务线` (or `/new`). BotFather asks, in order:
 
 Reply `就这样` (or `可以` / `行` / `好`) to wire, or `取消` to drop the draft. A group message never enters the factory. The host posts the question; Eval ignores the turn and does not send a second message.
 
-BotFather asks one block at a time and treats a heard answer as final for that block. It does not ask the same sentence again. A miss gets a different sentence with concrete choices. Colloquial wording is enough: a one-line persona such as 「他是我们的跟单同事」 is stored as said. On a list, 「就这些」 accepts the examples just offered. 「它自己」 lets the line phrase the options. 「你写」 drafts the greeting. Permissions stay `deferred`.
+BotFather asks one block at a time, the way a colleague would, and a heard answer sticks. It does not ask the same sentence again. A miss gets a different sentence with short choices. Colloquial and slightly fuzzy wording is enough: 「他是我们的跟单同事」, 「群里都能说」, 「open」, 「所有群里面都行」, 「全员」. On a list, 「就这些」 and 「你写」 store the examples just offered, not the filler around them. 「它自己」 lets the line phrase the options. 「你写」 on the greeting drafts one sentence; on the persona it drafts a one-line role. A name is never invented.
+
+A later sentence overrides an earlier slot instead of filling the current one. That covers ERP, where it speaks, and the persona. On the greeting step, 「不接入 Odoo」 or a workbench standing in for ERP turns ERP off and asks for the greeting again. The correction is not stored as the greeting. 「只私聊」 or 「改成只私聊」 updates the range and asks for the greeting again. 「人设改成…」 updates the persona and, on the confirm step, shows the recap again. Permissions stay `deferred`.
+
+The confirm step is a short recap in a few lines: who it is, where it speaks, what it answers, what it moves forward, what needs a decision, who phrases the options, who to find, and whether Odoo is on. Placeholder scraps such as 「这些」, 「就这些」, and 「你以后要问的」 are not quoted back. 「不对」 asks which line to change.
 
 Where it speaks has three answers. 「只私聊」 is direct messages only. A `wr_` or `oc_` id is a named group, with direct messages when the operator also says so. 「open」, 「所有群里面都行」, 「全员」, and the same kind of phrase mean direct messages plus every connected group. That is stored as `scope.directMessages: true` and `scope.otherChats: mentions` — the same `mentions` value a Source uses for other chats. It is not an allow list. BotFather still does not change the Source's other-chats switch, the Feishu CLI, or any credential.
 

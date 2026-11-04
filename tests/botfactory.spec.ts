@@ -107,7 +107,7 @@ describe('BotFather grill', () => {
     expect(turn.text).not.toBe(scopeNudge)
     expect(turn.text).not.toBe(scopeAsk)
     expect(turn.draft?.slot).toBe('scope')
-    for (const text of ['它open的，所有群里面都行', 'open', 'OPEN', '全员', '所有群里面都行', '到处都能说', '不限群']) {
+    for (const text of ['它open的，所有群里面都行', 'open', 'OPEN', '全员', '所有群里面都行', '到处都能说', '不限群', '群里都能说']) {
       const heard = say(text, { slot: 'scope', id: 'line-1', name: '跟单', persona: '他是我们的跟单同事' })
       expect(heard.text).not.toBe(scopeAsk)
       expect(heard.text).not.toContain('它在哪说话')
@@ -126,7 +126,7 @@ describe('BotFather grill', () => {
     turn = say('就这些', turn.draft)
     expect(turn.draft).toMatchObject({ humanApprove: ['改价格', '承诺交期'], slot: 'formatter' })
     turn = say('它自己', turn.draft)
-    expect(turn.draft).toMatchObject({ formatter: '跟单同事', slot: 'escalation' })
+    expect(turn.draft).toMatchObject({ formatter: '它自己', slot: 'escalation' })
     turn = say('就他', turn.draft)
     expect(turn.draft?.escalation).toEqual([{ name: '外贸负责人' }])
     turn = say('先不接', turn.draft)
@@ -176,6 +176,108 @@ describe('BotFather grill', () => {
     })
     expect(erp.draft?.slot).toBe('smoke')
     expect(erp.draft?.erp).toMatchObject({ enabled: true, write: ['phone'] })
+  })
+
+  it('lets a later no on Odoo replace an earlier yes, and recaps in short lines', () => {
+    const route = { ok: true, operators: [] } as const
+    const say = (text: string, draft?: GrillDraft | null) => {
+      const turn = botfatherTurn({ direct: true, userid: 'boss', text, route, draft: draft ?? undefined, identities: [] })
+      expect(turn.handled).toBe(true)
+      if (!turn.handled) throw new Error('expected a factory turn')
+      checkedSpeech(turn.text)
+      return turn
+    }
+    const base: GrillDraft = {
+      slot: 'smoke', id: 'line-1', name: '跟单', persona: '他是我们的跟单同事',
+      directMessages: true, otherChats: 'mentions', groups: [],
+      autoReply: ['这些', '别的', '你以后要问的彻底'],
+      autoAdvance: ['这些'],
+      humanApprove: ['这些我来排班'],
+      formatter: '它',
+      escalation: [{ name: '对、找外贸负责人' }],
+      erp: { enabled: true, adapter: 'odoo', sourceOfTruth: 'Odoo crm.lead', read: ['已有的电话'], write: ['phone'] },
+    }
+    const taken = say('接入', { ...base, slot: 'erp', erp: undefined })
+    expect(taken.draft?.erp).toMatchObject({ enabled: true })
+    expect(taken.draft?.slot).toBe('smoke')
+    const smokeAsk = taken.text
+    const corrected = say('不接入odoo了，这里我们有微信工作台能做erp功能吧', { ...base, slot: 'smoke' })
+    expect(corrected.draft?.slot).toBe('smoke')
+    expect(corrected.draft?.erp).toEqual({ enabled: false })
+    expect(corrected.draft?.smoke).toBeUndefined()
+    expect(corrected.text).toBe('好，Odoo 先不接。私聊见面第一句想怎么说？你写或说「你写」。')
+    expect(corrected.text).not.toBe(smokeAsk)
+    expect(corrected.text).not.toContain('工作台')
+    const recap = say('你写', corrected.draft)
+    expect(recap.draft?.slot).toBe('confirm')
+    expect(recap.draft?.smoke).toBe('在的。我是跟单同事。')
+    expect(recap.text).toContain('不接 Odoo')
+    expect(recap.text.replaceAll('不接 Odoo', '')).not.toContain('接 Odoo')
+    expect(recap.text).not.toContain('工作台')
+    expect(recap.text).not.toContain('就这些')
+    expect(recap.text).not.toContain('你以后')
+    expect(recap.text).not.toContain('这些我来排班')
+    expect(recap.text).toContain('直接回：打招呼、问进度')
+    expect(recap.text).toContain('需要你拍板：改价格、承诺交期')
+    expect(recap.text).toContain('出事找外贸负责人')
+    expect(recap.text).toContain('跟单同事')
+    expect(recap.text.split('\n').length).toBeGreaterThan(4)
+    expect((recap.text.match(/「/g) ?? []).length).toBe(1)
+    const wired = say('就这样', recap.draft)
+    expect(wired.wired).toMatchObject({
+      erp: { enabled: false },
+      smoke: '在的。我是跟单同事。',
+      formatter: '跟单同事',
+      autoReply: ['打招呼', '问进度'],
+      autoAdvance: ['跟单', '催办', '到账确认'],
+      humanApprove: ['改价格', '承诺交期'],
+      escalation: [{ name: '外贸负责人' }],
+    })
+    const named = say('对，找外贸负责人', { slot: 'escalation', id: 'line-1', name: '跟单', persona: '他是我们的跟单同事' })
+    expect(named.draft?.escalation).toEqual([{ name: '外贸负责人' }])
+    const soft = say('就这些，别的你以后要问的彻底', { slot: 'autoReply', id: 'line-1', name: '跟单', persona: '他是我们的跟单同事' })
+    expect(soft.draft?.autoReply).toEqual(['打招呼', '问进度'])
+    const scope = say('改成只私聊', { ...base, slot: 'smoke', erp: { enabled: false } })
+    expect(scope.draft).toMatchObject({ slot: 'smoke', directMessages: true, otherChats: 'none', groups: [] })
+    expect(scope.text).not.toContain('改成只私聊')
+    expect(scope.draft?.smoke).toBeUndefined()
+    const persona = say('人设改成客服同事', recap.draft)
+    expect(persona.draft?.slot).toBe('confirm')
+    expect(persona.draft?.persona).toBe('客服同事')
+    expect(persona.text).toContain('客服同事')
+    expect(persona.text).toContain('是谁：')
+    expect(persona.text).toContain('在哪：')
+    expect(persona.text).toContain('选项由客服同事来说')
+    expect(persona.text).toContain('招呼：在的。我是客服同事')
+    expect(persona.text).not.toContain('跟单同事')
+    expect(persona.text).not.toBe(recap.text)
+    expect(persona.wired).toBeUndefined()
+    const dmOnly = say('只私聊', { ...base, slot: 'smoke', erp: { enabled: false } })
+    expect(dmOnly.draft).toMatchObject({ slot: 'smoke', directMessages: true, otherChats: 'none', groups: [] })
+    expect(dmOnly.draft?.smoke).toBeUndefined()
+    expect(dmOnly.text).toContain('只在私聊')
+    expect(dmOnly.text).not.toContain('只私聊')
+  })
+
+  it('drafts a block when asked to write it, and does not take 你写 as the name', () => {
+    const route = { ok: true, operators: [] } as const
+    const say = (text: string, draft?: GrillDraft | null) => {
+      const turn = botfatherTurn({ direct: true, userid: 'boss', text, route, draft: draft ?? undefined, identities: [] })
+      expect(turn.handled).toBe(true)
+      if (!turn.handled) throw new Error('expected a factory turn')
+      checkedSpeech(turn.text)
+      return turn
+    }
+    const started = say('新建业务线')
+    const name = say('你写', started.draft)
+    expect(name.draft?.slot).toBe('name')
+    expect(name.draft?.name).toBeUndefined()
+    expect(name.text).not.toBe(started.text)
+    const persona = say('你写', { slot: 'persona', id: 'line-1', name: '跟单' })
+    expect(persona.draft).toMatchObject({ slot: 'scope', persona: '跟单同事，口语盯客户、订单和到账' })
+    const list = say('你写', { slot: 'autoReply', id: 'line-1', name: '跟单', persona: '跟单同事' })
+    expect(list.draft?.autoReply).toEqual(['打招呼', '问进度'])
+    expect(list.draft?.slot).toBe('autoAdvance')
   })
 
   it('stays off in groups and for a userid outside the factory route', () => {

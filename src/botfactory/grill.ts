@@ -41,8 +41,8 @@ const GROUP_NUDGES: readonly [string, string] = [
   '还差群号。发 wr_… 或 oc_…。不想指定的话，回「只私聊」或「所有群都行」。',
 ]
 const CONFIRM_NUDGES: readonly [string, string] = [
-  '没对上。回复「就这样」就接上，回复「取消」作废。',
-  '要接上就回「就这样」，不要了就回「取消」。',
+  '哪句要改？直接说人设、在哪说，或接不接 Odoo。回「就这样」就接上。',
+  '要改就直接说。接上回「就这样」，不要了回「取消」。',
 ]
 export const BOTFATHER_INIT = '要开新线，先在这台机器跑 botfactory-wire --init，然后再发「新建业务线」。还是这一个机器人。'
 const ROUTE_BROKEN = 'BotFather 的路由文件读不了，私聊工厂先停着。'
@@ -89,8 +89,15 @@ function emptyTalk(text: string): boolean {
   return /^(?:嗯+|啊+|哦+|呃+|啥|什么|不知道|不明白|哈+)[。.!！？?\s]*$/.test(text.trim())
 }
 
+const SOFT_ANSWER = /^(?:就这些|按这个|按例子|按你说的|你定|你看着办|看着办|你写|你来写|帮我写|写一句|随便写|都行|随便|可以|行|好的|好)(?:一句|吧)?$/
+
 function acceptsExamples(text: string): boolean {
-  return /^(?:就这些|按这个|按例子|按你说的|你定|你看着办|看着办|都行|随便|可以|行|好的|好)$/.test(punct(text))
+  return SOFT_ANSWER.test(punct(text))
+}
+
+/** 「你写」 means draft this block. It is not a name, a list item, or a greeting. */
+function wantsDraft(text: string): boolean {
+  return /^(?:你写|你来写|帮我写|写一句|随便写)(?:一句|个招呼|吧)?$/.test(punct(text))
 }
 
 function offerWord(text: string): boolean {
@@ -109,10 +116,11 @@ function parseName(text: string): { id: string; name: string } | undefined {
   const pair = /^([a-z][a-z0-9-]{1,40})\s+(.+)$/.exec(trimmed)
   if (pair?.[1] && pair[2] && pair[1] !== 'botfather') {
     const name = tidyName(pair[2])
-    if (name && name.length <= 40 && !PLAIN_SPEECH.test(name) && !offerWord(name)) return { id: pair[1], name }
+    if (name && name.length <= 40 && !PLAIN_SPEECH.test(name) && !offerWord(name) && !wantsDraft(name) && !acceptsExamples(name)) return { id: pair[1], name }
+    return undefined
   }
   const name = tidyName(trimmed)
-  if (!name || name.length > 40 || name === 'botfather' || PLAIN_SPEECH.test(name) || offerWord(name)) return undefined
+  if (!name || name.length > 40 || name === 'botfather' || PLAIN_SPEECH.test(name) || offerWord(name) || wantsDraft(name) || acceptsExamples(name)) return undefined
   return { id: identityId(name), name }
 }
 
@@ -122,13 +130,15 @@ function parsePersona(text: string): string | undefined {
   return persona
 }
 
+const RANGE = /只私聊|仅私聊|指定群|\bopen\b|开放|全开|所有群|全部群|每个群|任何群|群里都行|群里都能说|群里说就行|群里面|不限群|不限范围|不限制群|已接入|\bwr_|\boc_/i
+
 /** A scope phrase inside a persona sentence. 「全员」 alone is not enough here; it is on the scope step. */
 function explicitRange(text: string): boolean {
-  return /只私聊|仅私聊|指定群|\bopen\b|开放|全开|所有群|全部群|每个群|任何群|群里都行|群里面|不限群|已接入|\bwr_|\boc_/i.test(text)
+  return RANGE.test(text)
 }
 
 function withoutRangeClause(text: string): string {
-  const cut = text.replace(/[，,]\s*.*(?:只私聊|仅私聊|指定群|\bopen\b|开放|全开|所有群|全部群|每个群|任何群|群里都行|群里面|不限群|已接入|wr_|oc_).*/i, '').trim()
+  const cut = text.replace(new RegExp(`[，,]\\s*.*(?:${RANGE.source}).*`, 'i'), '').trim()
   return cut.length >= 2 ? cut : text.trim()
 }
 
@@ -138,7 +148,8 @@ function withoutRangeClause(text: string): string {
  */
 function wantsOpen(text: string): boolean {
   return /\bopen\b/i.test(text)
-    || /开放|全开|所有群|全部群|每个群|任何群|各个群|群里都行|群里都可以|群里都要|群里面都行|群里面都可以|所有群里面|不限群|到处都能说|到处可以|哪儿都能|哪里都能|哪儿都行|哪里都行|任何地方|谁都行|谁都可以|所有人|全员|已接入的群|都打开|全部打开|随便哪个群|哪个群都行|啥群都行|什么群都行/.test(text)
+    || /开放|全开|所有群|全部群|每个群|任何群|各个群|群里都行|群里都可以|群里都要|群里都能说|群里说就行|群里面都行|群里面都可以|群里面都能说|群里面说就行|所有群里面|不限群|不限范围|不限制群|到处都能说|到处可以|哪儿都能|哪里都能|哪儿都行|哪里都行|任何地方|谁都行|谁都可以|所有人|全员|已接入的群|都打开|全部打开|随便哪个群|哪个群都行|啥群都行|什么群都行/.test(text)
+    || /^(?:都能说|都可以说|都让说)$/.test(punct(text))
 }
 
 function chatIds(text: string): { chatId: string }[] {
@@ -180,48 +191,89 @@ function splitItems(text: string): string[] {
     const pieces = part.split('和').map(item => item.trim()).filter(Boolean)
     if (pieces.length >= 2 && pieces.every(item => item.length >= 2 && item.length <= 40)) return pieces
     return [part]
-  }).map(item => item.replace(/^(?:直接回|比如|例如)[:：]?/, '').replace(/(?:吧|啊|呀)$/u, '').trim()).filter(Boolean)
+  }).map(item => item.replace(/^(?:直接回|比如|例如)[:：]?/, '').replace(/(?:之类的|等等|吧|啊|呀)$/u, '').trim()).filter(Boolean)
+}
+
+/** Scraps from 「就这些」 or 「对，找…」 that must not be stored or shown as the answer. */
+function isFiller(item: string): boolean {
+  const text = item.trim()
+  if (!text) return true
+  if (/^(?:就?这些|别的|其他|等等|彻底|对|嗯+|啊+|哦+|它|他|她|吧|行|好|可以|你看着|你看着办)$/.test(text)) return true
+  if (text.length > 16 || !/这些|就这些|别的|你以后|以后再问|彻底|排班/.test(text)) return false
+  const rest = text
+    .replace(/你以后(?:要问的)?|以后再问|就?这些|别的|其他|等等|彻底|我来排班|排班/g, '')
+    .replace(/[的了吧啊呀呢哦吗，,、\s]/g, '')
+  return rest.length === 0
+}
+
+function concrete(items: string[]): string[] {
+  return items.filter(item => !isFiller(item) && !PLAIN_SPEECH.test(item))
 }
 
 function parseList(text: string, offered: readonly string[]): string[] | undefined {
-  const trimmed = punct(text)
-  if (acceptsExamples(trimmed)) return [...offered]
-  const body = trimmed.replace(/^(?:直接回|直接回复|直接办|往下推进|需要你拍板|要你拍板|包括|比如|例如)[:：]?/, '').trim()
-  const items = splitItems(body)
-  if (!items.length || items.length > 20 || items.some(item => item.length > 80 || PLAIN_SPEECH.test(item))) return undefined
+  const trimmed = punct(text).replace(/^(?:对|嗯+|好的?|行|可以)[，,、：:\s]+/, '')
+  const lead = trimmed.replace(/^(?:直接回|直接回复|直接办|往下推进|需要你拍板|要你拍板|包括|比如|例如)[:：]?/, '').trim()
+  if (acceptsExamples(lead) || /^(?:就?这些)(?:[，,、\s]|$)/.test(lead)) {
+    const rest = lead.replace(/^(?:就这些|按这个|按例子|按你说的|你定|你看着办|看着办|你写|你来写|帮我写|写一句|随便写|都行|随便|可以|行|好的?|好)(?:一句|吧)?[，,、。\s]*/, '')
+    const extra = concrete(splitItems(rest))
+    if (!extra.length) return offered.length ? [...offered] : undefined
+    return extra
+  }
+  const items = concrete(splitItems(lead))
+  if (!items.length) return offered.length && /这些|就这些|别的|看着|都行/.test(lead) ? [...offered] : undefined
+  if (items.length > 20 || items.some(item => item.length > 80)) return undefined
   return items
 }
 
+function tidyPerson(name: string): string {
+  const value = name.trim().replace(/^(?:对|嗯+|好的?|行|可以)[，,、\s]+/, '').replace(/^(?:找|联系)/, '').trim()
+  const parts = value.split(/[、,，]/).map(part => part.replace(/^(?:找|联系)/, '').trim()).filter(part => part && !isFiller(part))
+  return parts[0] ?? ''
+}
+
 function parseEscalation(text: string): { name: string; wecomUserId?: string; feishuOpenId?: string }[] | undefined {
-  const trimmed = punct(text)
+  const trimmed = punct(text).replace(/^(?:对|嗯+|好的?|行|可以)[，,、：:\s]+/, '')
   if (acceptsExamples(trimmed) || /^(?:就他|就她|就这个人)$/.test(trimmed)) return [{ name: '外贸负责人' }]
-  const items = parseList(trimmed.replace(/^(?:卡住了)?(?:就)?找/, '').trim(), [])
+  const items = parseList(trimmed.replace(/^(?:卡住了)?(?:就)?(?:找|联系)/, '').trim(), [])
   if (!items) return undefined
   const contacts = items.map(item => {
     const parts = item.split(/\s+/)
     const last = parts.at(-1) ?? ''
-    if (parts.length >= 2 && FEISHU_OPEN_ID.test(last)) return { name: parts.slice(0, -1).join(' '), feishuOpenId: last }
-    if (parts.length >= 2 && WECOM_ID.test(last)) return { name: parts.slice(0, -1).join(' '), wecomUserId: last }
-    return { name: item }
-  })
-  if (contacts.some(contact => !contact.name || contact.name.length > 40)) return undefined
+    if (parts.length >= 2 && FEISHU_OPEN_ID.test(last)) return { name: tidyPerson(parts.slice(0, -1).join(' ')), feishuOpenId: last }
+    if (parts.length >= 2 && WECOM_ID.test(last)) return { name: tidyPerson(parts.slice(0, -1).join(' ')), wecomUserId: last }
+    return { name: tidyPerson(item) }
+  }).filter(contact => contact.name && !isFiller(contact.name))
+  if (!contacts.length || contacts.some(contact => contact.name.length > 40)) return undefined
   return contacts
 }
 
+function rejectsErp(text: string): boolean {
+  const trimmed = punct(text)
+  if (/^(?:不接|不接了|先不接|别接|不用接)$/.test(trimmed)) return true
+  if (/不接入|别接|先不接|不用接|不接了/.test(text)) return true
+  if (/不接/.test(text) && /odoo|erp/i.test(text)) return true
+  return /工作台/.test(text) && /erp|odoo/i.test(text)
+}
+
+function wantsOdoo(text: string): boolean {
+  return /要接|接上|接一下|接入|接\s*odoo|用\s*odoo|\bodoo\b|^接$/i.test(text)
+}
+
+const ERP_ON: Extract<ErpConfig, { enabled: true }> = {
+  enabled: true, adapter: 'odoo', sourceOfTruth: 'Odoo crm.lead',
+  read: ['已有的电话、邮箱、联系人、公司'],
+  write: ['phone', 'email_from', 'contact_name'],
+}
+
 function parseErp(text: string): ErpConfig | undefined {
-  const trimmed = text.trim()
-  if (/salesforce|sap\b|erpnext|金蝶|用友/i.test(trimmed) && !/odoo/i.test(trimmed)) return undefined
-  const turnsOn = /要接|接上|接一下|接\s*odoo|用\s*odoo|\bodoo\b/i.test(trimmed)
-  if (/不接|别接|先不接|先不用|不需要|不用接|^(?:不用|没有|不)$/.test(trimmed) && !turnsOn) return { enabled: false }
-  if (!turnsOn && !(/^接$/.test(trimmed) || (/接/.test(trimmed) && !/不接|别接/.test(trimmed)))) return undefined
+  const trimmed = punct(text)
+  if (/salesforce|sap\b|erpnext|金蝶|用友/i.test(trimmed) && !/odoo/i.test(trimmed) && !rejectsErp(trimmed)) return undefined
+  if (rejectsErp(trimmed)) return { enabled: false }
+  if (!wantsOdoo(trimmed)) return undefined
   const models = trimmed.match(/[a-z]+\.[a-z]+/gi) ?? []
   if (models.some(model => model.toLowerCase() !== 'crm.lead')) return undefined
   const write = [...new Set([...trimmed.matchAll(/\b(phone|email_from|contact_name|partner_name|function|description)\b/g)].map(match => match[1] ?? ''))].filter(Boolean)
-  return {
-    enabled: true, adapter: 'odoo', sourceOfTruth: 'Odoo crm.lead',
-    read: ['已有的电话、邮箱、联系人、公司'],
-    write: write.length ? write : ['phone', 'email_from', 'contact_name'],
-  }
+  return { ...ERP_ON, write: write.length ? write : [...ERP_ON.write] }
 }
 
 function roleName(draft: GrillDraft): string {
@@ -239,25 +291,36 @@ function draftedSmoke(draft: GrillDraft): string {
   return role === '它自己' ? '在的。有事直接说。' : `在的。我是${role}。`
 }
 
+function draftedPersona(draft: GrillDraft): string {
+  const named = `${draft.name ?? ''}${draft.persona ?? ''}`
+  if (named.includes('跟单')) return '跟单同事，口语盯客户、订单和到账'
+  return '同事，口语帮人把事往下推'
+}
+
 function wantsDraftedSmoke(text: string): boolean {
   return /^(?:你写|你来写|帮我写|写一句|随便写|随便|看着办|你定|你看着办)(?:一句|个招呼|吧)?$/.test(punct(text))
 }
 
+function smokeIsCorrection(text: string): boolean {
+  return rejectsErp(text) || Boolean(parseErp(text)?.enabled) || laterScope(text) !== undefined || laterPersona(text) !== undefined
+}
+
 function parseSmoke(text: string, draft: GrillDraft): string | undefined {
   if (wantsDraftedSmoke(text)) return draftedSmoke(draft)
+  if (smokeIsCorrection(text)) return undefined
   const trimmed = text.trim()
   if (trimmed.length < 2 || trimmed.length > 160 || PLAIN_SPEECH.test(trimmed)) return undefined
   return trimmed
 }
 
 function speaksForItself(text: string): boolean {
-  return /^(?:它自己|他自己|她自己|就它|这条线|你来|你说|用它)$/.test(punct(text))
+  return /^(?:它|他|她|它自己|他自己|她自己|就它|这条线|你来|你说|用它)$/.test(punct(text))
 }
 
 function parseFormatter(text: string, draft: GrillDraft): string | undefined {
   const trimmed = punct(text)
   if (!trimmed || PLAIN_SPEECH.test(trimmed)) return undefined
-  if (speaksForItself(trimmed) || acceptsExamples(trimmed)) return roleName(draft)
+  if (speaksForItself(trimmed) || acceptsExamples(trimmed) || wantsDraft(trimmed)) return '它自己'
   if (trimmed.length > 60) return undefined
   return trimmed
 }
@@ -277,11 +340,49 @@ function blank(slot: GrillSlot): GrillDraft {
   return { slot }
 }
 
+function shortPersona(draft: GrillDraft): string {
+  const persona = draft.persona?.trim() ?? ''
+  if (!persona) return draft.name ?? '这条线'
+  if (persona.includes('跟单同事')) return '跟单同事'
+  const colleague = persona.match(/[\u4e00-\u9fff]{2,8}同事/)
+  if (colleague?.[0]) return colleague[0]
+  const clause = persona.split(/[，,。]/)[0]?.trim() ?? persona
+  return clause.length <= 18 ? clause : clause.slice(0, 18)
+}
+
+function showList(items: readonly string[] | undefined, offered: readonly string[]): string {
+  const clean = (items ?? []).map(item => item.trim()).filter(item => item && !isFiller(item) && !PLAIN_SPEECH.test(item))
+  return (clean.length ? clean : [...offered]).join('、')
+}
+
+function shownFormatter(draft: GrillDraft): string {
+  const raw = draft.formatter?.trim() ?? ''
+  if (!raw || isFiller(raw) || /^(?:它|他|她)(自己)?$/.test(raw)) return roleName(draft)
+  return raw
+}
+
+function shownPeople(draft: GrillDraft): string {
+  const names = [...new Set((draft.escalation ?? []).map(item => tidyPerson(item.name)).filter(Boolean))]
+  return names.length ? names.join('、') : '负责人'
+}
+
+/** A few plain lines. Placeholder scraps are replaced with the examples already offered. */
 function summary(draft: GrillDraft): string {
+  const smoke = draft.smoke && !smokeIsCorrection(draft.smoke) ? draft.smoke : '在的'
   const erp = draft.erp?.enabled ? '接 Odoo' : '不接 Odoo'
-  const where = whereSpeech(draft)
-  const full = `${draft.name ?? ''}。${where}。直接回 ${(draft.autoReply ?? []).join('、')}。往下推进 ${(draft.autoAdvance ?? []).join('、')}。需要你拍板 ${(draft.humanApprove ?? []).join('、')}。选项由${draft.formatter ?? ''}来说。权限先不做。找 ${(draft.escalation ?? []).map(item => item.name).join('、')}。${erp}。招呼：${draft.smoke ?? ''}。回复「就这样」就接上。`
-  return spoken(full, `${draft.name ?? '这条线'}。${where}。权限先不做。回复「就这样」就接上，回复「取消」作废。`)
+  const lines = [
+    `是谁：${draft.name ?? '这条线'}，${shortPersona(draft)}。`,
+    `在哪：${whereSpeech(draft)}。`,
+    `直接回：${showList(draft.autoReply, OFFERED.autoReply)}。`,
+    `往下推进：${showList(draft.autoAdvance, OFFERED.autoAdvance)}。`,
+    `需要你拍板：${showList(draft.humanApprove, OFFERED.humanApprove)}。`,
+    `选项由${shownFormatter(draft)}来说。出事找${shownPeople(draft)}。`,
+    `${erp}。招呼：${punct(smoke)}。`,
+    '权限先不做。回「就这样」就接上。',
+  ]
+  const full = lines.join('\n')
+  const short = `${draft.name ?? '这条线'}。${whereSpeech(draft)}。${erp}。权限先不做。回「就这样」就接上。`
+  return spoken(full, short)
 }
 
 function doneWhere(identity: BusinessIdentity): string {
@@ -301,15 +402,126 @@ function doneSpeech(identity: BusinessIdentity): string {
   )
 }
 
+function cleanPeople(draft: GrillDraft): NonNullable<GrillDraft['escalation']> | undefined {
+  const cleaned = (draft.escalation ?? []).map(item => ({ ...item, name: tidyPerson(item.name) })).filter(item => item.name && !isFiller(item.name))
+  return cleaned.length ? cleaned : draft.escalation
+}
+
 function finish(draft: GrillDraft): BusinessIdentity | undefined {
   const parsed = BusinessIdentitySchema.safeParse({
     id: draft.id, name: draft.name, persona: draft.persona,
     scope: { directMessages: draft.directMessages, otherChats: draft.otherChats ?? 'none', groups: draft.groups ?? [] },
-    autoReply: draft.autoReply, autoAdvance: draft.autoAdvance, humanApprove: draft.humanApprove,
-    formatter: draft.formatter, escalation: draft.escalation, erp: draft.erp, smoke: draft.smoke,
+    autoReply: showList(draft.autoReply, OFFERED.autoReply).split('、'),
+    autoAdvance: showList(draft.autoAdvance, OFFERED.autoAdvance).split('、'),
+    humanApprove: showList(draft.humanApprove, OFFERED.humanApprove).split('、'),
+    formatter: shownFormatter(draft),
+    escalation: cleanPeople(draft),
+    erp: draft.erp,
+    smoke: draft.smoke && !smokeIsCorrection(draft.smoke) ? draft.smoke : draftedSmoke(draft),
     permissions: 'deferred',
   })
   return parsed.success ? parsed.data : undefined
+}
+
+const SMOKE_AFTER_ERP = '好，Odoo 先不接。私聊见面第一句想怎么说？你写或说「你写」。'
+
+type LaterFix = { erp?: ErpConfig, directMessages?: boolean, otherChats?: 'none' | 'mentions', groups?: { chatId: string }[], persona?: string }
+
+/** A short scope answer, or an explicit 「改成…」, said after that block was already settled. */
+function laterScope(text: string): ScopeChoice | undefined {
+  if (/改成只私聊|还是只私聊|不要群了|不在群里说|只在私聊说|改成私聊/.test(text)) {
+    return { directMessages: true, groups: [], otherChats: 'none' }
+  }
+  if (/改成所有群|还是所有群|改成开放|所有群都行|全部群都行|改成全员/.test(text)) {
+    return { directMessages: true, groups: [], otherChats: 'mentions' }
+  }
+  const trimmed = punct(text)
+  if (trimmed.length > 24 || acceptsExamples(trimmed) || wantsDraft(trimmed)) return undefined
+  const scope = parseScope(trimmed)
+  if (!scope || scope === 'need-group') return undefined
+  return scope
+}
+
+function laterPersona(text: string): string | undefined {
+  const match = text.match(/(?:人设|角色)(?:改成|换成|改为)[:：]?\s*([^\n，。]{2,30})/)
+    ?? text.match(/^(?:改成|换成)[:：]?\s*([\u4e00-\u9fff]{2,12}同事)$/)
+  const name = match?.[1]?.trim()
+  if (!name || PLAIN_SPEECH.test(name) || isFiller(name)) return undefined
+  return name
+}
+
+/** ERP said out of turn. A long unrelated sentence is left for the current block. */
+function laterErp(text: string, slot: GrillSlot): ErpConfig | undefined {
+  if (slot === 'name' || slot === 'persona' || slot === 'scope' || slot === 'erp') return undefined
+  if (rejectsErp(text)) return { enabled: false }
+  const erp = parseErp(text)
+  if (!erp?.enabled) return undefined
+  if (slot === 'smoke' || slot === 'confirm' || punct(text).length <= 24 || /改成|还是|改口/.test(text)) return erp
+  return undefined
+}
+
+/** A later sentence that takes back an earlier slot. The current step is not answered by it. */
+function hearFix(text: string, slot: GrillSlot): LaterFix | undefined {
+  if (slot === 'name' || slot === 'persona' || slot === 'scope' || slot === 'erp') return undefined
+  const fix: LaterFix = {}
+  const erp = laterErp(text, slot)
+  if (erp) fix.erp = erp
+  const scope = laterScope(text)
+  if (scope) {
+    fix.directMessages = scope.directMessages
+    fix.otherChats = scope.otherChats
+    fix.groups = scope.groups
+  }
+  const persona = laterPersona(text)
+  if (persona) fix.persona = persona
+  if (!fix.erp && fix.otherChats === undefined && fix.directMessages === undefined && !fix.persona) return undefined
+  return fix
+}
+
+function ackFix(fix: LaterFix, next: GrillDraft): string {
+  const parts: string[] = []
+  if (fix.erp?.enabled === false) parts.push('Odoo 先不接')
+  else if (fix.erp?.enabled) parts.push('接上 Odoo')
+  if (fix.persona) parts.push(`人设改成${fix.persona}`)
+  if (fix.otherChats !== undefined || fix.directMessages !== undefined || fix.groups) parts.push(`改成${whereSpeech(next)}`)
+  if (!parts.length) return '好，改好了。'
+  return `好，${parts.join('，')}。`
+}
+
+function fixChanges(draft: GrillDraft, fix: LaterFix): boolean {
+  if (fix.erp && draft.erp?.enabled !== fix.erp.enabled) return true
+  if (fix.persona && draft.persona !== fix.persona) return true
+  if (fix.otherChats !== undefined && draft.otherChats !== fix.otherChats) return true
+  if (fix.directMessages !== undefined && draft.directMessages !== fix.directMessages) return true
+  if (fix.groups && JSON.stringify(draft.groups ?? []) !== JSON.stringify(fix.groups)) return true
+  return false
+}
+
+function applyLaterFix(draft: GrillDraft, text: string): BotfatherTurn | undefined {
+  const slot = draft.slot
+  const fix = hearFix(text, slot)
+  if (!fix) return undefined
+  const next: GrillDraft = { ...draft, ...fix, slot }
+  if (fix.persona && draft.smoke && draft.smoke === draftedSmoke(draft)) next.smoke = draftedSmoke(next)
+  const changed = fixChanges(draft, fix)
+  if (slot === 'smoke') {
+    const reply = !changed
+      ? '这点已经记下了。私聊见面第一句想怎么说？说「你写」也行。'
+      : fix.erp?.enabled === false
+        ? SMOKE_AFTER_ERP
+        : `${ackFix(fix, next)}私聊见面第一句想怎么说？你写或说「你写」。`
+    return { handled: true, text: reply, draft: { ...next, asks: changed ? 0 : 1 } }
+  }
+  if (slot === 'confirm') {
+    return {
+      handled: true,
+      text: changed ? summary(next) : '这点已经记下了。回「就这样」就接上，回复「取消」作废。',
+      draft: next,
+    }
+  }
+  const asks = draft.asks === 1 ? 1 : 0
+  const nudge = NUDGES[slot][asks]
+  return { handled: true, text: changed ? `${ackFix(fix, next)}${nudge}` : nudge, draft: { ...next, asks: asks === 0 ? 1 : 0 } }
 }
 
 /** Another line already owns this group. The same id may keep its own chats. */
@@ -359,6 +571,8 @@ function fill(draft: GrillDraft, text: string, identities: readonly BusinessIden
     if (slot === 'scope' && draft.listenFor === 'group-id') return askGroupId(draft)
     return keep(draft, slot)
   }
+  const fixed = applyLaterFix(draft, text)
+  if (fixed) return fixed
   switch (slot) {
     case 'name': {
       const named = parseName(text)
@@ -366,7 +580,7 @@ function fill(draft: GrillDraft, text: string, identities: readonly BusinessIden
       return go(draft, 'persona', named, QUESTIONS.persona)
     }
     case 'persona': {
-      const persona = parsePersona(text)
+      const persona = wantsDraft(text) ? draftedPersona(draft) : parsePersona(text)
       if (!persona) return keep(draft, 'persona')
       if (explicitRange(text)) {
         const scope = parseScope(text)
@@ -405,9 +619,11 @@ function fill(draft: GrillDraft, text: string, identities: readonly BusinessIden
     case 'escalation': {
       const escalation = parseEscalation(text)
       if (!escalation) return keep(draft, 'escalation')
+      if (draft.erp) return go(draft, 'smoke', { escalation }, QUESTIONS.smoke)
       return go(draft, 'erp', { escalation }, QUESTIONS.erp)
     }
     case 'erp': {
+      if (draft.erp) return go(draft, 'smoke', {}, QUESTIONS.smoke)
       const erp = parseErp(text)
       if (!erp) return keep(draft, 'erp')
       return go(draft, 'smoke', { erp }, QUESTIONS.smoke)
