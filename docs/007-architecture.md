@@ -381,6 +381,11 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/sources/odoo-read.ts` | `odooThreadContext`: the activity and pages of the lead's chatter |
 | `src/sources/odoo-rpc.ts` | The XML-RPC client: authenticate, `search_read`, `write` and `message_post` |
 | `src/sources/odoo-xml.ts` | The XML-RPC codec those calls use |
+| `src/sources/wecom.ts` | The WeCom kind and plugin entry, exported as `./wecom-watch`: one smart-bot long connection |
+| `src/sources/wecom-trigger.ts` | WeCom text, voice, mixed text and template-card clicks as Triggers |
+| `src/sources/wecom-channel.ts` | The WeCom Channel: markdown or a gate button card, `sent` or `gone` |
+| `src/sources/wecom-socket.ts` | The one WebSocket per BotID, using `@wecom/aibot-node-sdk` |
+| `src/sources/wecom-read.ts` | `wecomThreadContext`: the triggering message only, because the long connection has no history |
 | `src/client/index.tsx` | The client plugin entry: the sidebar entry, the main panel and the page in DeepSeek Harness's Plugin Manager |
 | `src/client/app.tsx` | The panel: header, search, glossary, tabs and the page of the current route |
 | `src/client/provider.tsx` | What every page reads from its host: copy, calls, navigation, notices, the state poll, and `restart`, which reads the state quickly while dsh-superagent restarts |
@@ -404,7 +409,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/client/locales.ts` | All copy in both languages, and the glossary of [001 Domain model](001-domain.md) |
 | `src/client/client.css`, `css.d.ts` | The panel's stylesheet, loaded as text |
 
-`src/sources/github.ts`, `src/sources/feishu.ts` and `src/sources/odoo.ts` are also the entries of the Source plugins, built by `tsdown.config.ts` and exported in `package.json` as `./github-watch`, `./feishu-watch` and `./odoo-watch`. The bundle's `cordis.patch.yml` inserts the plugins, with Feishu and Odoo disabled.
+`src/sources/github.ts`, `src/sources/feishu.ts`, `src/sources/odoo.ts` and `src/sources/wecom.ts` are also the entries of the Source plugins, built by `tsdown.config.ts` and exported in `package.json` as `./github-watch`, `./feishu-watch`, `./odoo-watch` and `./wecom-watch`. The bundle's `cordis.patch.yml` inserts the plugins, with Feishu, Odoo and WeCom disabled.
 
 ## Tests
 
@@ -416,6 +421,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `tests/registry.spec.ts` | `SourceRegistry`: instances, validation, Policy parts, Channels and Thread context |
 | `tests/sources.spec.ts` | The Feishu and GitHub Sources on a `SourceContext`: translation, polls and read positions, the pull request rules, health |
 | `tests/odoo.spec.ts` | The Odoo Source: activity translation, the poll cursor, configuration, channel notes, and the three worker tools' arguments |
+| `tests/wecom.spec.ts` | The WeCom Source: frame translation, gate-card framing, configuration, and the long connection without live credentials |
 | `tests/commands.spec.ts` | CLI calls as the deployment's accounts, the Channels' answers, and repository-scoped GitHub calls |
 | `tests/feishu-read.spec.ts`, `tests/github-read.spec.ts` | Feishu and GitHub reads |
 | `tests/admission-context.spec.ts`, `tests/feishu-image.spec.ts` | The Thread window of assessments, and Feishu image reads |
