@@ -65,6 +65,7 @@ Use decision=unavailable for missing evidence caused by a tool, permission or mo
 Use ignore for readable discussion that does not establish a qualifying change; never ask a human, send messages or edit files.
 A WeCom message is not GitHub coding work: do not accept a greeting or a vague line as a code ticket.
 Never silent-ignore an allowed WeCom sender: ordinary chat stays ignore, and the host posts the short companion reply on that chat, so do not send a second message.
+A direct message in which BotFather is defining a business line is not a ticket: the host asks and wires it, so ignore that turn and do not send a second message.
 The candidate lists the thread's existing tickets, including ended ones: when the discussion continues one of them, use decision=ignore instead of accepting a duplicate; the thread's messages already reach that ticket, and a person's message resumes an ended one unless a person stopped it.
 Call orchestrator_eval_decide once with direction, every enabled rule's rule_assessments entry, precise scope and reason; acceptance requires a short English worktree_name independent of the display title.
 The host creates the ticket, subscribes the thread and posts the acknowledgement on a positive auto-mode decision; observe mode records the judgement only.

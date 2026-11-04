@@ -30,6 +30,7 @@ Read the numbered documents in order; each builds only on the ones before it.
 - [007 Architecture](docs/007-architecture.md)
 - [008 Cookbook](docs/008-cookbook.md): adding a Source
 - [009 Odoo](docs/009-odoo.md): the optional CRM activity Source
+- [010 BotFather](docs/010-botfactory.md): business lines on the one WeCom bot
 
 ## Development
 

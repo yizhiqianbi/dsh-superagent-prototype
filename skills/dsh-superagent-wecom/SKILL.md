@@ -16,11 +16,19 @@ Use this when enabling the WeCom Source. The host already delivers replies on th
 ## What the connection can do
 
 - Inbound text, a voice transcript, mixed text, and a template-card button click become Triggers. A group message is a mention. A direct message is direct. The long connection does not deliver other group messages.
-- Each recorded text or card click also queues one short notice on that same chat, even when Eval ignores it and opens no ticket. A greeting is 「在的。跟单、催办、到账确认这类事直接说就行。」 Other chat is 「收到。具体要办的事（客户/订单/节点）说一下，我帮你盯着推进；需要你拍板的我会先把选项列好。」 The same msgid does not send it twice, and an acknowledgement already queued for that trigger is left alone. A card with no title line is titled 待确认.
+- Each recorded text or card click also queues one short notice on that same chat, even when Eval ignores it and opens no ticket. A greeting is 「在的。跟单、催办、到账确认这类事直接说就行。」 Other chat is 「收到。具体要办的事（客户/订单/节点）说一下，我帮你盯着推进；需要你拍板的我会先把选项列好。」 A wired business line replaces the greeting with that line's smoke sentence. The same msgid does not send it twice, and an acknowledgement already queued for that trigger is left alone. A card with no title line is titled 待确认.
 - An image, a file, or a video alone is not a Trigger. There is no history API, so an assessment sees the triggering message and nothing before it.
 - Outbound text goes out as markdown on `aibot_send_msg`. A short report whose body fits a card and which has at least two lines such as `① 合并` and `② 再看` goes out as a button card. The click comes back as that line.
 - The boss has to message the bot once before a proactive report can reach that chat. A lost acknowledgement can deliver the same report twice: WeCom does not accept this host's message id as an idempotency key.
-- `$DSH_SUPERAGENT_WECOM_BOT` is the BotID. `$DSH_SUPERAGENT_WECOM_CHAT` is the chat that started the ticket, and is empty for a ticket that started somewhere else.
+- `$DSH_SUPERAGENT_WECOM_BOT` is the BotID. `$DSH_SUPERAGENT_WECOM_CHAT` is the chat that started the ticket, and is empty for a ticket that started somewhere else. `$DSH_SUPERAGENT_WECOM_IDENTITIES` is the directory of business lines BotFather wrote, and is empty when none are wired. Companion fragments for those lines are in `companions/` next to that directory.
+
+## BotFather
+
+BotFather is a direct-message factory on this same bot. It is not a second BotID, and it does not grant permissions. Multi-BotID is out of scope.
+
+Identities live under the superagent profile: `botfactory/botfather.yml` is the DM route (an empty `operators` list means any direct message that shows factory intent), `botfactory/identities/<id>.yml` is one business line, and `botfactory/companions/<id>.md` is the speech the companion uses. The Source field `identitiesDir` points at `botfactory/identities`. The same directory is also unioned into the WeCom chat list and the admission rows, so a line is active without a group @. WeCom still only pushes group messages that @ the bot. Direct messages have to stay on, because that is where BotFather talks.
+
+Run `pnpm botfactory-wire --init` once so the profile listens on both channels, then DM either bot 「新建业务线」. Or validate a finished file with `pnpm botfactory-wire --dry-run examples/botfactory/trade-followup.yml` and wire it with the same command without `--dry-run`. A group id starting with `oc_` is written to the Feishu Source; any other group id is written to WeCom. Both keep direct messages on. The command does not print `WECOM_BOT_SECRET`. See [docs/010-botfactory.md](../../docs/010-botfactory.md).
 
 ## Live check
 

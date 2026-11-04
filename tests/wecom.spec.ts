@@ -133,7 +133,7 @@ describe('wecom frames', () => {
 
 describe('wecom settings', () => {
   it('keeps the secret out of settings and listens to listed chats, other mentions and direct messages', () => {
-    expect(wecomKind.schema.parse({})).toEqual({ botId: '', secretEnv: 'WECOM_BOT_SECRET', chats: [], directMessages: true, otherChats: 'none' })
+    expect(wecomKind.schema.parse({})).toEqual({ botId: '', secretEnv: 'WECOM_BOT_SECRET', chats: [], directMessages: true, otherChats: 'none', identitiesDir: '' })
     expect(() => wecomKind.schema.parse({ secret: 'nope' })).toThrow()
     expect(() => wecomKind.schema.parse({ secretEnv: 'bot_secret' })).toThrow()
     expect(() => wecomKind.schema.parse({ chats: [{ chatId: 'wr_team' }, { chatId: 'wr_team' }] })).toThrow(/Duplicate chat IDs/)

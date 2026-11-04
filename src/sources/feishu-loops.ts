@@ -3,7 +3,11 @@ import { spawn } from 'node:child_process'
 import { createInterface } from 'node:readline'
 import { setTimeout as delay } from 'node:timers/promises'
 import { z } from 'zod'
-import { threadKey, type Thread, type Trigger } from '../core/index.ts'
+import { threadKey, key, type ReceiveResult, type Thread, type Trigger } from '../core/index.ts'
+import { planCompanion } from '../botfactory/companion.ts'
+import { SAVE_FAILED } from '../botfactory/grill.ts'
+import { pushWecomSettings } from '../botfactory/settings.ts'
+import { openFactory } from '../botfactory/store.ts'
 import { feishuChatLink } from './feishu-channel.ts'
 import type { FeishuBot } from '../deployment.ts'
 import { validItems, type Tally } from '../infra/commands.ts'
@@ -23,13 +27,32 @@ const bot = (ctx: SourceContext): FeishuBot => {
   if (!resolved) throw new Error('The Feishu Source has no working bot CLI')
   return resolved
 }
-async function receive(ctx: SourceContext, trigger: Trigger): Promise<void> {
-  await ctx.receive(trigger)
+async function receive(ctx: SourceContext, trigger: Trigger): Promise<ReceiveResult> {
+  const result = await ctx.receive(trigger)
   const chatId = String(trigger.meta.chatId ?? '')
-  if (!chatId) return
+  if (!chatId) return result
   const name = ctx.state.get(KV.sources.labels(SOURCE))?.[chatId] ?? chatId
   const chat = trigger.meta.direct === true ? { value: { zh: '私聊', en: 'Direct message' } } : { value: name }
   for (const ref of trigger.threads) ctx.threads.describe(threadKey(ref), { url: chatLink(ctx, chatId), facts: { chat } })
+  return result
+}
+
+/** BotFather on a live Feishu message. History and topic polls do not call this, so old messages are not answered. */
+function queueFeishuFactory(ctx: SourceContext, trigger: Trigger, result: ReceiveResult, identitiesDir: string): void {
+  if (result === 'filtered' || !trigger.channel) return
+  const library = identitiesDir ? openFactory(identitiesDir) : undefined
+  const plan = planCompanion(trigger, library)
+  if (!plan) return
+  const notice = { id: key('feishu-botfather', trigger.id), channel: trigger.channel, text: plan.text, kind: 'notice' as const }
+  if (ctx.outboundStatus(notice.id) || ctx.outboundStatus(key('ack', trigger.id))) return
+  let message = notice
+  if (plan.commit) {
+    try { plan.commit() } catch { message = { ...notice, text: SAVE_FAILED } }
+  }
+  ctx.notify(message)
+  if (plan.wired && identitiesDir && message.text !== SAVE_FAILED) {
+    void pushWecomSettings(identitiesDir, library?.identities() ?? []).catch(() => { /* The identity file is already the listen list. */ })
+  }
 }
 const chatLink = (ctx: SourceContext, chatId: string): string => feishuChatLink(ctx.deployment.feishu?.brand ?? 'feishu', chatId)
 function available(ctx: SourceContext): boolean {
@@ -92,7 +115,8 @@ async function consume(ctx: SourceContext, signal: AbortSignal): Promise<void> {
       const chats = ctx.state.get(KV.feishu.chats) ?? {}
       chats[String(trigger.meta.chatId)] = trigger.meta.direct === true
       ctx.state.set(KV.feishu.chats, chats)
-      await receive(ctx, trigger)
+      const result = await receive(ctx, trigger)
+      queueFeishuFactory(ctx, trigger, result, enabled(ctx)?.identitiesDir ?? '')
     }).catch(error => { ctx.report('feishu', { state: 'error', detail: String(error) }) })
   })
   try {

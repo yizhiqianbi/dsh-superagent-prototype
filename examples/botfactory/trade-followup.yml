@@ -1,0 +1,37 @@
+# Business line wired by BotFather onto the one WeCom bot.
+# permissions stays deferred: this file is not an allow list, and it is not a BotID.
+id: trade-followup
+name: 外贸跟单伴侣
+persona: 你是跟单同事，用口语帮人盯客户、订单和到账。
+scope:
+  directMessages: true
+  groups:
+    # oc_ chat ids in this list are Feishu. Anything else is WeCom.
+    - chatId: wr_trade
+      name: 外贸跟单群
+autoReply:
+  - 打招呼
+  - 问进度
+autoAdvance:
+  - 跟单
+  - 催办
+  - 到账确认
+humanApprove:
+  - 改价格
+  - 承诺交期
+formatter: 跟单同事
+escalation:
+  - name: 外贸负责人
+    wecomUserId: ZhangSan
+erp:
+  enabled: true
+  adapter: odoo
+  sourceOfTruth: Odoo crm.lead
+  read:
+    - 已有的电话、邮箱、联系人、公司
+  write:
+    - phone
+    - email_from
+    - contact_name
+smoke: 在的。跟单、催办、到账确认直接说就行；改价或答应交期，我先把选项列好，等你拍板。
+permissions: deferred
