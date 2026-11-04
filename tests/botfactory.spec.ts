@@ -65,6 +65,28 @@ describe('BotFather session', () => {
     expect(factoryHandoff(SettingsSchema.parse({}), dm('新建业务线'))).toBeUndefined()
   })
 
+  it('keeps a picture with the words and does not answer that turn itself', () => {
+    const dir = join(temp(), 'identities')
+    const library = openFactory(dir)
+    const shot = wecomTrigger({ body: { msgid: 'img', chattype: 'single', from: { userid: 'boss' }, msgtype: 'mixed', mixed: { msg_item: [
+      { msgtype: 'image', image: { url: 'https://example.invalid/sop', aeskey: 'secret-key' } },
+      { msgtype: 'text', text: { content: '新建业务线' } },
+      { msgtype: 'text', text: { content: '外贸跟单 SOP' } },
+    ] } } }, NOW)!
+    expect(shot.text).not.toContain('secret-key')
+    expect(shot.text).not.toContain('example.invalid')
+    const notices: { text: string }[] = []
+    const ctx = { notify: (message: { text: string }) => { notices.push(message) }, outboundStatus: () => undefined }
+    queueWecomCompanion(ctx, shot, 'stored', dir)
+    expect(notices).toEqual([])
+    expect(library.draft('boss')?.lines[0]?.text).toBe('[图片 wximg_1]\n新建业务线\n外贸跟单 SOP')
+    const later = wecomTrigger({ body: { msgid: 'img2', chattype: 'single', from: { userid: 'boss' }, msgtype: 'image',
+      image: { url: 'https://example.invalid/b', aeskey: 'k2' } } }, NOW)!
+    const next = planCompanion(later, library)
+    expect(next?.harness).toBe(true)
+    expect(next?.text).toBeUndefined()
+  })
+
   it('does not post a question, and an ordinary greeting stays a greeting', () => {
     const root = temp()
     const dir = join(root, 'identities')
@@ -170,6 +192,7 @@ describe('BotFather session', () => {
 
   it('tells only the orchestrator to call botfather', () => {
     expect(composePrompt(defaultPrompts(), 'orchestrator')).toContain('call botfather')
+    expect(composePrompt(defaultPrompts(), 'orchestrator')).toContain('Read the image')
     expect(composePrompt(defaultPrompts(), 'worker')).not.toContain('call botfather')
   })
 })

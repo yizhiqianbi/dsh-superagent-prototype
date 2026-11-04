@@ -1,5 +1,6 @@
 /** BotFather's entry on a direct message, and the speech a wired line leaves for the companion. */
 import { createHash } from 'node:crypto'
+import { WECOM_FILE_MISSED, WECOM_FILE_NOTE, WECOM_IMAGE_EXTRA, WECOM_IMAGE_MISSED, WECOM_QUOTE } from '../sources/wecom-trigger.ts'
 import type { BusinessIdentity } from './schema.ts'
 import { chatChannel } from './schema.ts'
 
@@ -10,9 +11,18 @@ export const ROUTE_BROKEN = 'BotFather 的路由文件读不了，私聊工厂�
 export const SAVE_FAILED = '没存上。再发一次。'
 export const FACTORY_STOP = '好，这条先停。'
 
+/** A picture token or a failed download is not the command. The words around it still are. */
+function spokenCommand(text: string): string {
+  return text.trim().split('\n').map(line => line.trim()).filter(line => {
+    if (!line || line === WECOM_QUOTE) return false
+    if (line === WECOM_FILE_NOTE || line === WECOM_IMAGE_MISSED || line === WECOM_FILE_MISSED || line === WECOM_IMAGE_EXTRA) return false
+    return !/^\[(?:图片|文件) wximg_[1-9]\d*\]$/.test(line)
+  }).join('\n')
+}
+
 /** A factory command, and any words typed after it. Longer phrases are matched first. */
 export function factoryStart(text: string): { rest: string } | undefined {
-  const trimmed = text.trim()
+  const trimmed = spokenCommand(text)
   const folded = trimmed.toLowerCase()
   for (const phrase of STARTS) {
     const probe = phrase.startsWith('/') || phrase === 'botfather' ? folded : trimmed

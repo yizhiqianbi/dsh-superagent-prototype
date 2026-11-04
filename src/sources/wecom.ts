@@ -10,6 +10,7 @@ import { key, threadKey, type ReceiveResult, type Trigger } from '../core/index.
 import { health, sourceContext, type SourceContext } from './host.ts'
 import type { SourceKind } from './kind.ts'
 import { sendWecom, wecomCompanionNotice, wecomLink } from './wecom-channel.ts'
+import { materializeWecomImages } from './wecom-image.ts'
 import { wecomThreadContext } from './wecom-read.ts'
 import { acquireWecomBot, bindWecomSend, createWecomSocket, wecomAuthFailed, type WecomCredentials, type WecomSocket } from './wecom-socket.ts'
 import { SOURCE, WECOM_ID, wecomTrigger } from './wecom-trigger.ts'
@@ -48,8 +49,8 @@ export const wecomKind: SourceKind<WecomConfig> = {
   kind: SOURCE,
   title: { zh: '企业微信', en: 'WeCom' },
   description: {
-    zh: '通过智能机器人长连接接收已列出的群里 @ 机器人的消息、私聊，以及选项卡片上的按钮。企业微信不推送群里的其他消息，也没有历史接口。BotID 写在这里或 WECOM_BOT_ID；Secret 只放在 secretEnv 指向的环境变量里。',
-    en: 'Receives @ mentions in the listed chats, direct messages, and option-card button clicks over the smart-bot long connection. WeCom does not push other group messages and has no history API. The BotID is set here or in WECOM_BOT_ID; the Secret stays in the environment variable named by secretEnv.',
+    zh: '通过智能机器人长连接接收已列出的群里 @ 机器人的消息、私聊、图片，以及选项卡片上的按钮。图片会下载下来交给会话。企业微信不推送群里的其他消息，也没有历史接口。BotID 写在这里或 WECOM_BOT_ID；Secret 只放在 secretEnv 指向的环境变量里。',
+    en: 'Receives @ mentions in the listed chats, direct messages, images, and option-card button clicks over the smart-bot long connection. Images are downloaded and handed to the session. WeCom does not push other group messages and has no history API. The BotID is set here or in WECOM_BOT_ID; the Secret stays in the environment variable named by secretEnv.',
   },
   schema: WecomConfigSchema,
   fields: [
@@ -226,8 +227,11 @@ export async function runWecomSession(ctx: SourceContext, creds: WecomCredential
   const ingest = (frame: unknown): void => {
     chain = chain.then(async () => {
       if (signal.aborted || !enabled(ctx)) return
-      const trigger = wecomTrigger(frame)
-      if (!trigger) return
+      const parsed = wecomTrigger(frame)
+      if (!parsed) return
+      // The picture url lives for about five minutes. Download it before the trigger is stored, and do not keep the aes key.
+      const trigger = await materializeWecomImages(parsed, (url, aesKey) => client.downloadFile(url, aesKey), ctx.deployment.stateDir)
+      if (signal.aborted || !enabled(ctx)) return
       const result = await ctx.receive(trigger)
       describe(ctx, trigger)
       queueWecomCompanion(ctx, trigger, result, enabled(ctx)?.identitiesDir ?? '', true)
@@ -279,6 +283,8 @@ function session(ctx: SourceContext, client: WecomSocket, creds: WecomCredential
     })
     client.on('message.text', ingest)
     client.on('message.voice', ingest)
+    client.on('message.image', ingest)
+    client.on('message.file', ingest)
     client.on('message.mixed', ingest)
     client.on('event.template_card_event', ingest)
     if (signal.aborted) { finish(); return }

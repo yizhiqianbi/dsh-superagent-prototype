@@ -382,10 +382,11 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/sources/odoo-rpc.ts` | The XML-RPC client: authenticate, `search_read`, `write` and `message_post` |
 | `src/sources/odoo-xml.ts` | The XML-RPC codec those calls use |
 | `src/sources/wecom.ts` | The WeCom kind and plugin entry, exported as `./wecom-watch`: one smart-bot long connection |
-| `src/sources/wecom-trigger.ts` | WeCom text, voice, mixed text and template-card clicks as Triggers |
+| `src/sources/wecom-trigger.ts` | WeCom text, voice, images, files, mixed messages and template-card clicks as Triggers. The picture url and aes key stay out of the text |
+| `src/sources/wecom-image.ts` | Downloads and decrypts a WeCom picture on the long connection, stores it under the state directory, and reads it back for the session |
 | `src/sources/wecom-channel.ts` | The WeCom Channel: markdown or a gate button card, `sent` or `gone` |
-| `src/sources/wecom-socket.ts` | The one WebSocket per BotID, using `@wecom/aibot-node-sdk` |
-| `src/sources/wecom-read.ts` | `wecomThreadContext`: the triggering message only, because the long connection has no history |
+| `src/sources/wecom-socket.ts` | The one WebSocket per BotID, using `@wecom/aibot-node-sdk`, including `downloadFile` |
+| `src/sources/wecom-read.ts` | `wecomThreadContext`: the triggering message only, because the long connection has no history, plus a picture already stored for it |
 | `src/botfactory/schema.ts` | The business-line identity and the BotFather direct-message route. Permissions stay deferred |
 | `src/botfactory/yaml.ts` | The YAML subset those identity files use |
 | `src/botfactory/grill.ts` | The factory entry, a stop, identity ids, and the companion fragment a wired line leaves |

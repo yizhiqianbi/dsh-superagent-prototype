@@ -4,11 +4,13 @@ import type { WecomOutbound } from './wecom-channel.ts'
 
 export const WECOM_WS_URL = 'wss://openws.work.weixin.qq.com'
 export type WecomSocketEvent = 'authenticated' | 'disconnected' | 'reconnecting' | 'error' | 'message.text' | 'message.voice'
-  | 'message.mixed' | 'event.template_card_event' | 'event.disconnected_event'
+  | 'message.image' | 'message.file' | 'message.mixed' | 'event.template_card_event' | 'event.disconnected_event'
 export interface WecomSocket {
   connect(): void
   disconnect(): void
   sendMessage(chatId: string, body: WecomOutbound): Promise<unknown>
+  /** Downloads and decrypts one media url. `aesKey` is the frame's `aeskey`. */
+  downloadFile(url: string, aesKey?: string): Promise<{ buffer: Uint8Array; filename?: string }>
   on(event: WecomSocketEvent, handler: (payload: unknown) => void): void
 }
 export interface WecomCredentials { botId: string; secret: string }
@@ -29,6 +31,7 @@ function sdkSocket(credentials: WecomCredentials): WecomSocket {
     connect: () => { client.connect() },
     disconnect: () => { client.disconnect() },
     sendMessage: (chatId, body) => client.sendMessage(chatId, body as SendMsgBody),
+    downloadFile: (url, aesKey) => client.downloadFile(url, aesKey),
     on: (event, handler) => { client.on(event, handler as never) },
   }
 }

@@ -21,6 +21,8 @@ The WeCom Source field `identitiesDir` points at `botfactory/identities`. `$DSH_
 
 DM the bot `新建业务线` (or `/new`, `/botfather`). The host does not ask a form. The same session that handles other work talks: it follows the business, asks when something is missing, and lets a later answer replace an earlier one. When the line is clear, it says so in a few plain sentences and writes the template.
 
+A picture in that direct message is downloaded and shown to the session with the words, so it can read a screenshot. The caption and a quote stay with the picture. The download address and its key are not shown to the session.
+
 `取消`, `算了`, or `/cancel` drops an open conversation. A group message never enters it. Someone outside a non-empty `operators` list does not enter it either. A direct message with no identity directory still gets the short `--init` line from the host, and the session does not answer that turn a second time.
 
 ## Template

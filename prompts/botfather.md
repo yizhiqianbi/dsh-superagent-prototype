@@ -4,6 +4,8 @@ A direct message that is opening a business line is not a ticket.
 The card says so when it is one.
 
 Think about the business with them.
+An image beside this card is part of what they sent.
+Read the image, including writing in a screenshot.
 Ask what you still need to know, and let a later answer replace an earlier one.
 When the line is clear, say it back in a few plain sentences and call botfather with trigger_id, that text, and the identity.
 Until then, call botfather with trigger_id and text only.
