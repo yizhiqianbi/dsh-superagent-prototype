@@ -1,20 +1,17 @@
-/** Chooses the companion line: BotFather on a WeCom or Feishu direct message, otherwise the WeCom greeting. */
+/** Leaves a factory direct message to the session. Other chat keeps the companion line. */
 import type { Trigger } from '../core/index.ts'
 import { SOURCE as FEISHU } from '../sources/feishu-trigger.ts'
 import { WECOM_GREETING, wecomCompanionText } from '../sources/wecom-channel.ts'
 import { SOURCE as WECOM } from '../sources/wecom-trigger.ts'
-import { BOTFATHER_INIT, botfatherTurn, factoryStart, smokeFor } from './grill.ts'
+import { factoryKey, remember } from './harness.ts'
+import { BOTFATHER_INIT, FACTORY_STOP, ROUTE_BROKEN, factoryStart, factoryStop, smokeFor } from './grill.ts'
 import type { FactoryLibrary } from './store.ts'
 
-export interface CompanionPlan { text: string; wired?: boolean; commit?: () => void }
-
-function draftKey(trigger: Trigger, userid: string): string {
-  return trigger.source === FEISHU ? `feishu-${userid}` : userid
-}
+export interface CompanionPlan { text?: string; wired?: boolean; harness?: boolean; commit?: () => void }
 
 /**
- * The host's single reply. Factory turns commit their draft only after the caller decides to send.
- * Feishu stays quiet except for the factory and a wired line's greeting, so ordinary Feishu chat is not given the WeCom received line.
+ * The host's reply, when it has one. A factory direct message only records the line (`harness`) so the session can talk.
+ * Feishu stays quiet except for that conversation and a wired line's greeting.
  */
 export function planCompanion(trigger: Trigger, library: FactoryLibrary | undefined): CompanionPlan | undefined {
   if (trigger.source !== WECOM && trigger.source !== FEISHU) return undefined
@@ -26,23 +23,17 @@ export function planCompanion(trigger: Trigger, library: FactoryLibrary | undefi
     if (direct && factoryStart(trigger.text)) return { text: BOTFATHER_INIT }
     return feishu ? undefined : { text: wecomCompanionText(trigger.text) }
   }
-  const key = draftKey(trigger, userid)
-  const turn = botfatherTurn({
-    direct, userid, text: trigger.text, route: library.route(),
-    draft: userid ? library.draft(key) : undefined, identities: library.identities(),
-  })
-  if (!turn.handled) {
-    const smoke = smokeFor(library.identities(), direct, chatId)
-    if (feishu) return smoke && wecomCompanionText(trigger.text) === WECOM_GREETING ? { text: smoke } : undefined
-    return { text: wecomCompanionText(trigger.text, smoke) }
+  const key = factoryKey(trigger)
+  const route = library.route()
+  const draft = userid ? library.draft(key) : undefined
+  if (direct && !route.ok && (factoryStart(trigger.text) || draft?.open)) {
+    return { text: ROUTE_BROKEN, commit: () => { if (userid) library.saveDraft(key, null) } }
   }
-  return {
-    text: turn.text,
-    wired: turn.wired !== undefined,
-    commit: () => {
-      if (!userid) return
-      if (turn.wired) library.saveIdentity(turn.wired)
-      library.saveDraft(key, turn.draft)
-    },
-  }
+  const allowed = route.ok && (route.operators.length === 0 || route.operators.includes(userid))
+  const talking = direct && allowed && userid !== '' && (factoryStart(trigger.text) !== undefined || draft?.open === true)
+  if (talking && factoryStop(trigger.text)) return { text: FACTORY_STOP, commit: () => { library.saveDraft(key, null) } }
+  if (talking) return { harness: true, commit: () => { library.saveDraft(key, remember(draft, trigger.text)) } }
+  const smoke = smokeFor(library.identities(), direct, chatId)
+  if (feishu) return smoke && wecomCompanionText(trigger.text) === WECOM_GREETING ? { text: smoke } : undefined
+  return { text: wecomCompanionText(trigger.text, smoke) }
 }

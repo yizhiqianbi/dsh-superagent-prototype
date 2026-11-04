@@ -1,19 +1,23 @@
-/** BotFather grill, identity files, and the dry-run wire onto one WeCom bot. */
+/** BotFather's session handoff, identity files, and the dry-run wire onto one WeCom bot. */
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { composePrompt, defaultPrompts } from '../src/app/prompts.ts'
 import { planCompanion } from '../src/botfactory/companion.ts'
-import { botfatherTurn, chatConflict, smokeFor } from '../src/botfactory/grill.ts'
-import { BotfatherRouteSchema, type GrillDraft } from '../src/botfactory/schema.ts'
+import { FACTORY_STOP, ROUTE_BROKEN, smokeFor } from '../src/botfactory/grill.ts'
+import { applyBotfather, factoryHandoff } from '../src/botfactory/harness.ts'
+import { BotfatherRouteSchema, type BusinessIdentity } from '../src/botfactory/schema.ts'
 import { scrub } from '../src/botfactory/secrets.ts'
 import { enableWecomPlugin, mergeFeishuConfig, mergeWecomConfig, webPort } from '../src/botfactory/settings.ts'
 import { loadIdentities, openFactory, parseIdentityFile } from '../src/botfactory/store.ts'
 import { runBotfactory } from '../src/botfactory/wire.ts'
 import { parseYaml } from '../src/botfactory/yaml.ts'
 import { checkedImText } from '../src/infra/text.ts'
+import { SettingsSchema } from '../src/policy.ts'
 import { feishuKind } from '../src/sources/feishu.ts'
 import { queueWecomCompanion, wecomKind } from '../src/sources/wecom.ts'
+import { WECOM_GREETING, WECOM_RECEIVED } from '../src/sources/wecom-channel.ts'
 import { wecomTrigger } from '../src/sources/wecom-trigger.ts'
 import type { Trigger } from '../src/core/index.ts'
 
@@ -37,254 +41,136 @@ function checkedSpeech(text: string): string {
   return checkedImText(text)
 }
 
-describe('BotFather grill', () => {
-  it('asks one question at a time in a direct message and wires a line without a group mention', () => {
-    const identities = [] as ReturnType<typeof loadIdentities>
-    const steps = [
-      '新建业务线 trade-followup 外贸跟单伴侣',
-      '你是跟单同事，用口语帮人盯客户、订单和到账。',
-      '只私聊',
-      '打招呼、问进度',
-      '跟单、催办、到账确认',
-      '改价格、承诺交期',
-      '跟单同事',
-      '外贸负责人 ZhangSan',
-      '不接',
-      '在的。跟单、催办、到账确认直接说就行。',
-      '就这样',
-    ]
-    let turn = botfatherTurn({ direct: true, userid: 'boss', text: steps[0]!, route: { ok: true, operators: [] }, draft: undefined, identities })
-    for (const text of steps.slice(1)) {
-      expect(turn.handled).toBe(true)
-      if (!turn.handled) return
-      checkedSpeech(turn.text)
-      turn = botfatherTurn({ direct: true, userid: 'boss', text, route: { ok: true, operators: [] }, draft: turn.draft ?? undefined, identities })
-    }
-    expect(turn.handled).toBe(true)
-    if (!turn.handled || !turn.wired) throw new Error('expected a wired line')
-    checkedSpeech(turn.text)
-    expect(turn.text).toContain('不用先在群里')
-    expect(turn.wired).toMatchObject({
-      id: 'trade-followup', name: '外贸跟单伴侣', permissions: 'deferred',
-      scope: { directMessages: true, otherChats: 'none', groups: [] }, erp: { enabled: false },
-    })
-    expect(chatConflict([{ ...turn.wired, id: 'other', scope: { directMessages: false, otherChats: 'none', groups: [{ chatId: 'wr_trade' }] } }],
-      { ...turn.wired, scope: { directMessages: true, otherChats: 'none', groups: [{ chatId: 'wr_trade' }] } })).toMatch(/wr_trade/)
+function example(): BusinessIdentity {
+  return parseIdentityFile(readFileSync(EXAMPLE, 'utf8'))
+}
+
+describe('BotFather session', () => {
+  it('leaves a direct message that opens a line to the session, and keeps talking', () => {
+    const root = temp()
+    const dir = join(root, 'identities')
+    const library = openFactory(dir)
+    const started = planCompanion(dm('新建业务线'), library)
+    expect(started?.harness).toBe(true)
+    expect(started?.text).toBeUndefined()
+    started?.commit?.()
+    expect(library.draft('boss')?.lines).toEqual([{ role: 'user', text: '新建业务线' }])
+    const next = planCompanion(dm('不接 Odoo，工作台当 ERP', 'boss', 'b'), library)
+    expect(next?.harness).toBe(true)
+    expect(next?.text).toBeUndefined()
+    next?.commit?.()
+    expect(library.draft('boss')?.lines.map(line => line.text)).toEqual(['新建业务线', '不接 Odoo，工作台当 ERP'])
+    const settings = SettingsSchema.parse({ sources: { wecom: { enabled: true, config: { identitiesDir: dir } } } })
+    expect(factoryHandoff(settings, dm('不接 Odoo，工作台当 ERP', 'boss', 'b'))?.lines.at(-1)?.text).toBe('不接 Odoo，工作台当 ERP')
+    expect(factoryHandoff(SettingsSchema.parse({}), dm('新建业务线'))).toBeUndefined()
   })
 
-  it('hears a follow-up colleague and an open range, then moves on without repeating itself', () => {
-    const route = { ok: true, operators: [] } as const
-    const identities = [] as ReturnType<typeof loadIdentities>
-    const say = (text: string, draft?: GrillDraft | null) => {
-      const turn = botfatherTurn({ direct: true, userid: 'boss', text, route, draft: draft ?? undefined, identities })
-      expect(turn.handled).toBe(true)
-      if (!turn.handled) throw new Error('expected a factory turn')
-      checkedSpeech(turn.text)
-      return turn
-    }
-    let turn = say('新建业务线')
-    expect(turn.text).toContain('这条线叫什么')
-    turn = say('就叫跟单吧', turn.draft)
-    expect(turn.draft?.name).toBe('跟单')
-    expect(turn.draft?.slot).toBe('persona')
-    const personaAsk = turn.text
-    turn = say('嗯', turn.draft)
-    expect(turn.draft?.slot).toBe('persona')
-    expect(turn.text).not.toBe(personaAsk)
-    turn = say('他是我们的跟单同事', turn.draft)
-    expect(turn.text).not.toBe(personaAsk)
-    expect(turn.text).not.toContain('它是谁')
-    expect(turn.draft).toMatchObject({ slot: 'scope', persona: '他是我们的跟单同事' })
-    const scopeAsk = turn.text
-    turn = say('再说吧', turn.draft)
-    expect(turn.draft?.slot).toBe('scope')
-    expect(turn.text).not.toBe(scopeAsk)
-    expect(turn.text).toContain('只私聊')
-    expect(turn.text).toContain('指定群')
-    expect(turn.text).toContain('所有已接入')
-    const scopeNudge = turn.text
-    turn = say('再说吧', turn.draft)
-    expect(turn.text).not.toBe(scopeNudge)
-    expect(turn.text).not.toBe(scopeAsk)
-    expect(turn.draft?.slot).toBe('scope')
-    for (const text of ['它open的，所有群里面都行', 'open', 'OPEN', '全员', '所有群里面都行', '到处都能说', '不限群', '群里都能说']) {
-      const heard = say(text, { slot: 'scope', id: 'line-1', name: '跟单', persona: '他是我们的跟单同事' })
-      expect(heard.text).not.toBe(scopeAsk)
-      expect(heard.text).not.toContain('它在哪说话')
-      expect(heard.text).toContain('直接回')
-      expect(heard.draft).toMatchObject({ slot: 'autoReply', directMessages: true, otherChats: 'mentions', groups: [] })
-    }
-    turn = say('它open的，所有群里面都行', turn.draft)
-    expect(turn.draft?.slot).toBe('autoReply')
-    const replyAsk = turn.text
-    turn = say('就这些', turn.draft)
-    expect(turn.text).not.toBe(replyAsk)
-    expect(turn.draft).toMatchObject({ slot: 'autoAdvance', autoReply: ['打招呼', '问进度'] })
-    const listed = say('打招呼和问进度', { slot: 'autoReply', id: 'line-1', name: '跟单', persona: '他是我们的跟单同事' })
-    expect(listed.draft?.autoReply).toEqual(['打招呼', '问进度'])
-    turn = say('就这些', turn.draft)
-    turn = say('就这些', turn.draft)
-    expect(turn.draft).toMatchObject({ humanApprove: ['改价格', '承诺交期'], slot: 'formatter' })
-    turn = say('它自己', turn.draft)
-    expect(turn.draft).toMatchObject({ formatter: '它自己', slot: 'escalation' })
-    turn = say('就他', turn.draft)
-    expect(turn.draft?.escalation).toEqual([{ name: '外贸负责人' }])
-    turn = say('先不接', turn.draft)
-    expect(turn.draft?.erp).toEqual({ enabled: false })
-    turn = say('你写', turn.draft)
-    expect(turn.draft?.smoke).toBe('在的。我是跟单同事。')
-    expect(turn.text).toContain('所有已接入')
-    const summary = turn.text
-    turn = say('不对', turn.draft)
-    expect(turn.text).not.toBe(summary)
-    expect(turn.draft?.slot).toBe('confirm')
-    turn = say('不对', turn.draft)
-    expect(turn.text).not.toBe(summary)
-    turn = say('可以', turn.draft)
-    expect(turn.wired).toMatchObject({
-      name: '跟单', persona: '他是我们的跟单同事', permissions: 'deferred',
-      scope: { directMessages: true, otherChats: 'mentions', groups: [] },
-      formatter: '跟单同事', smoke: '在的。我是跟单同事。',
-    })
-    expect(turn.text).toContain('所有已接入')
-    expect(turn.text).not.toMatch(/闸门|呈报/)
-    if (!turn.wired) throw new Error('expected a wired line')
-    expect(smokeFor([turn.wired], false, 'wr_anywhere')).toBe('在的。我是跟单同事。')
-    const named = say('私聊，群 wr_trade，还有 oc_room', { slot: 'scope', name: '跟单', persona: '他是我们的跟单同事' })
-    expect(named.draft).toMatchObject({
-      slot: 'autoReply', directMessages: true, otherChats: 'none',
-      groups: [{ chatId: 'wr_trade' }, { chatId: 'oc_room' }],
-    })
-    const first = say('第一个', { slot: 'scope', name: '跟单', persona: '他是我们的跟单同事' })
-    expect(first.draft).toMatchObject({ slot: 'autoReply', directMessages: true, otherChats: 'none', groups: [] })
-    const third = say('第三个', { slot: 'scope', name: '跟单', persona: '他是我们的跟单同事' })
-    expect(third.draft).toMatchObject({ slot: 'autoReply', directMessages: true, otherChats: 'mentions', groups: [] })
-    const picked = say('指定群', { slot: 'scope', name: '跟单', persona: '他是我们的跟单同事' })
-    expect(picked.draft?.slot).toBe('scope')
-    expect(picked.draft?.listenFor).toBe('group-id')
-    expect(picked.text).toContain('wr_')
-    expect(picked.text).not.toContain('它在哪说话')
-    const alongside = say('他是我们的跟单同事，所有群里面都行', { slot: 'persona', id: 'line-1', name: '跟单' })
-    expect(alongside.draft).toMatchObject({
-      slot: 'autoReply', persona: '他是我们的跟单同事', directMessages: true, otherChats: 'mentions',
-    })
-    const erp = say('接 Odoo，以 crm.lead 为准，写 phone', {
-      slot: 'erp', id: 'line-1', name: '跟单', persona: '他是我们的跟单同事',
-      directMessages: true, otherChats: 'mentions', groups: [],
-      autoReply: ['打招呼'], autoAdvance: ['跟单'], humanApprove: ['改价格'],
-      formatter: '跟单同事', escalation: [{ name: '外贸负责人' }],
-    })
-    expect(erp.draft?.slot).toBe('smoke')
-    expect(erp.draft?.erp).toMatchObject({ enabled: true, write: ['phone'] })
+  it('does not post a question, and an ordinary greeting stays a greeting', () => {
+    const root = temp()
+    const dir = join(root, 'identities')
+    const library = openFactory(dir)
+    const notices: { text: string }[] = []
+    const ctx = { notify: (message: { text: string }) => { notices.push(message) }, outboundStatus: () => undefined }
+    queueWecomCompanion(ctx, dm('新建业务线', 'boss', 'a'), 'stored', dir)
+    expect(notices).toEqual([])
+    expect(library.draft('boss')?.lines[0]?.text).toBe('新建业务线')
+    queueWecomCompanion(ctx, dm('你好', 'boss', 'c'), 'filtered', dir)
+    expect(notices).toEqual([])
+    queueWecomCompanion(ctx, dm('你好', 'other', 'd'), 'stored')
+    expect(notices.map(notice => notice.text)).toEqual([WECOM_GREETING])
   })
 
-  it('lets a later no on Odoo replace an earlier yes, and recaps in short lines', () => {
-    const route = { ok: true, operators: [] } as const
-    const say = (text: string, draft?: GrillDraft | null) => {
-      const turn = botfatherTurn({ direct: true, userid: 'boss', text, route, draft: draft ?? undefined, identities: [] })
-      expect(turn.handled).toBe(true)
-      if (!turn.handled) throw new Error('expected a factory turn')
-      checkedSpeech(turn.text)
-      return turn
-    }
-    const base: GrillDraft = {
-      slot: 'smoke', id: 'line-1', name: '跟单', persona: '他是我们的跟单同事',
-      directMessages: true, otherChats: 'mentions', groups: [],
-      autoReply: ['这些', '别的', '你以后要问的彻底'],
-      autoAdvance: ['这些'],
-      humanApprove: ['这些我来排班'],
-      formatter: '它',
-      escalation: [{ name: '对、找外贸负责人' }],
-      erp: { enabled: true, adapter: 'odoo', sourceOfTruth: 'Odoo crm.lead', read: ['已有的电话'], write: ['phone'] },
-    }
-    const taken = say('接入', { ...base, slot: 'erp', erp: undefined })
-    expect(taken.draft?.erp).toMatchObject({ enabled: true })
-    expect(taken.draft?.slot).toBe('smoke')
-    const smokeAsk = taken.text
-    const corrected = say('不接入odoo了，这里我们有微信工作台能做erp功能吧', { ...base, slot: 'smoke' })
-    expect(corrected.draft?.slot).toBe('smoke')
-    expect(corrected.draft?.erp).toEqual({ enabled: false })
-    expect(corrected.draft?.smoke).toBeUndefined()
-    expect(corrected.text).toBe('好，Odoo 先不接。私聊见面第一句想怎么说？你写或说「你写」。')
-    expect(corrected.text).not.toBe(smokeAsk)
-    expect(corrected.text).not.toContain('工作台')
-    const recap = say('你写', corrected.draft)
-    expect(recap.draft?.slot).toBe('confirm')
-    expect(recap.draft?.smoke).toBe('在的。我是跟单同事。')
-    expect(recap.text).toContain('不接 Odoo')
-    expect(recap.text.replaceAll('不接 Odoo', '')).not.toContain('接 Odoo')
-    expect(recap.text).not.toContain('工作台')
-    expect(recap.text).not.toContain('就这些')
-    expect(recap.text).not.toContain('你以后')
-    expect(recap.text).not.toContain('这些我来排班')
-    expect(recap.text).toContain('直接回：打招呼、问进度')
-    expect(recap.text).toContain('需要你拍板：改价格、承诺交期')
-    expect(recap.text).toContain('出事找外贸负责人')
-    expect(recap.text).toContain('跟单同事')
-    expect(recap.text.split('\n').length).toBeGreaterThan(4)
-    expect((recap.text.match(/「/g) ?? []).length).toBe(1)
-    const wired = say('就这样', recap.draft)
-    expect(wired.wired).toMatchObject({
-      erp: { enabled: false },
-      smoke: '在的。我是跟单同事。',
-      formatter: '跟单同事',
-      autoReply: ['打招呼', '问进度'],
-      autoAdvance: ['跟单', '催办', '到账确认'],
-      humanApprove: ['改价格', '承诺交期'],
-      escalation: [{ name: '外贸负责人' }],
-    })
-    const named = say('对，找外贸负责人', { slot: 'escalation', id: 'line-1', name: '跟单', persona: '他是我们的跟单同事' })
-    expect(named.draft?.escalation).toEqual([{ name: '外贸负责人' }])
-    const soft = say('就这些，别的你以后要问的彻底', { slot: 'autoReply', id: 'line-1', name: '跟单', persona: '他是我们的跟单同事' })
-    expect(soft.draft?.autoReply).toEqual(['打招呼', '问进度'])
-    const scope = say('改成只私聊', { ...base, slot: 'smoke', erp: { enabled: false } })
-    expect(scope.draft).toMatchObject({ slot: 'smoke', directMessages: true, otherChats: 'none', groups: [] })
-    expect(scope.text).not.toContain('改成只私聊')
-    expect(scope.draft?.smoke).toBeUndefined()
-    const persona = say('人设改成客服同事', recap.draft)
-    expect(persona.draft?.slot).toBe('confirm')
-    expect(persona.draft?.persona).toBe('客服同事')
-    expect(persona.text).toContain('客服同事')
-    expect(persona.text).toContain('是谁：')
-    expect(persona.text).toContain('在哪：')
-    expect(persona.text).toContain('选项由客服同事来说')
-    expect(persona.text).toContain('招呼：在的。我是客服同事')
-    expect(persona.text).not.toContain('跟单同事')
-    expect(persona.text).not.toBe(recap.text)
-    expect(persona.wired).toBeUndefined()
-    const dmOnly = say('只私聊', { ...base, slot: 'smoke', erp: { enabled: false } })
-    expect(dmOnly.draft).toMatchObject({ slot: 'smoke', directMessages: true, otherChats: 'none', groups: [] })
-    expect(dmOnly.draft?.smoke).toBeUndefined()
-    expect(dmOnly.text).toContain('只在私聊')
-    expect(dmOnly.text).not.toContain('只私聊')
-  })
-
-  it('drafts a block when asked to write it, and does not take 你写 as the name', () => {
-    const route = { ok: true, operators: [] } as const
-    const say = (text: string, draft?: GrillDraft | null) => {
-      const turn = botfatherTurn({ direct: true, userid: 'boss', text, route, draft: draft ?? undefined, identities: [] })
-      expect(turn.handled).toBe(true)
-      if (!turn.handled) throw new Error('expected a factory turn')
-      checkedSpeech(turn.text)
-      return turn
-    }
-    const started = say('新建业务线')
-    const name = say('你写', started.draft)
-    expect(name.draft?.slot).toBe('name')
-    expect(name.draft?.name).toBeUndefined()
-    expect(name.text).not.toBe(started.text)
-    const persona = say('你写', { slot: 'persona', id: 'line-1', name: '跟单' })
-    expect(persona.draft).toMatchObject({ slot: 'scope', persona: '跟单同事，口语盯客户、订单和到账' })
-    const list = say('你写', { slot: 'autoReply', id: 'line-1', name: '跟单', persona: '跟单同事' })
-    expect(list.draft?.autoReply).toEqual(['打招呼', '问进度'])
-    expect(list.draft?.slot).toBe('autoAdvance')
-  })
-
-  it('stays off in groups and for a userid outside the factory route', () => {
+  it('stays off in groups, for someone outside the route, and when the route file will not parse', () => {
+    const root = temp()
+    const dir = join(root, 'identities')
+    const library = openFactory(dir)
     const group = wecomTrigger({ body: { msgid: 'g1', chatid: 'wr_trade', chattype: 'group', from: { userid: 'boss' }, msgtype: 'text', text: { content: '新建业务线' } } }, NOW)!
-    expect(planCompanion(group, undefined)?.text).not.toContain('这条线叫什么')
-    expect(botfatherTurn({ direct: true, userid: 'bob', text: '新建业务线', route: { ok: true, operators: ['alice'] }, draft: undefined, identities: [] }).handled).toBe(false)
-    expect(botfatherTurn({ direct: false, userid: 'boss', text: '新建业务线', route: { ok: true, operators: [] }, draft: undefined, identities: [] }).handled).toBe(false)
+    expect(planCompanion(group, library)?.harness).toBeUndefined()
+    expect(planCompanion(group, library)?.text).toBe(WECOM_RECEIVED)
+    writeFileSync(join(root, 'botfather.yml'), 'id: botfather\nname: BotFather\nroute: dm\noperators:\n  - alice\n')
+    const closed = openFactory(dir)
+    expect(planCompanion(dm('新建业务线', 'bob'), closed)?.harness).toBeUndefined()
+    expect(planCompanion(dm('新建业务线', 'bob'), closed)?.text).toBe(WECOM_RECEIVED)
+    writeFileSync(join(root, 'botfather.yml'), 'nope: [\n')
+    expect(planCompanion(dm('新建业务线'), openFactory(dir))?.text).toBe(ROUTE_BROKEN)
+  })
+
+  it('drops an open conversation on an exact stop, and still asks to init when nothing is wired', () => {
+    const dir = join(temp(), 'identities')
+    const library = openFactory(dir)
+    library.saveDraft('boss', { open: true, lines: [{ role: 'user', text: '新建业务线' }] })
+    const stopped = planCompanion(dm('取消', 'boss', 'x'), library)
+    expect(stopped?.text).toBe(FACTORY_STOP)
+    expect(stopped?.harness).toBeUndefined()
+    stopped?.commit?.()
+    expect(library.draft('boss')).toBeUndefined()
+    expect(planCompanion(dm('新建业务线'), undefined)?.text).toContain('--init')
+  })
+
+  it('writes the session\'s own words with the template, and a later template replaces the line', () => {
+    const dir = join(temp(), 'identities')
+    const library = openFactory(dir)
+    const identity = example()
+    const first = applyBotfather(library, 'boss', { text: '先记着，Odoo 开着。', identity })
+    expect(first.say).toBe('先记着，Odoo 开着。')
+    expect(first.wired?.id).toBe('trade-followup')
+    expect(library.draft('boss')).toBeUndefined()
+    const said = '这条线是外贸跟单。私聊和外贸跟单群。Odoo 先不接。'
+    const second = applyBotfather(library, 'boss', { text: said, identity: { ...identity, erp: { enabled: false } } })
+    expect(second.say).toBe(said)
+    expect(second.say).not.toContain('这些我来排班')
+    expect(loadIdentities(dir)[0]?.erp).toEqual({ enabled: false })
+  })
+
+  it('refuses an unfinished template and a group another line owns', () => {
+    const dir = join(temp(), 'identities')
+    const library = openFactory(dir)
+    library.saveDraft('boss', { open: true, lines: [{ role: 'user', text: '新建业务线' }] })
+    const identity = example()
+    const { persona: _persona, ...rest } = identity
+    const missing = applyBotfather(library, 'boss', { text: '还没齐。', identity: rest })
+    expect(missing.error).toMatch(/persona/)
+    expect(missing.say).toBeUndefined()
+    expect(loadIdentities(dir)).toEqual([])
+    expect(library.draft('boss')?.open).toBe(true)
+    library.saveIdentity(identity)
+    const conflict = applyBotfather(library, 'boss', {
+      text: '换一条。', identity: { ...identity, id: 'other-line', name: '另一条' },
+    })
+    expect(conflict.error).toMatch(/wr_trade/)
+    expect(loadIdentities(dir).map(item => item.id)).toEqual(['trade-followup'])
+  })
+
+  it('derives an id, forces deferred permissions, and will not send a line that is too long', () => {
+    const dir = join(temp(), 'identities')
+    const library = openFactory(dir)
+    const identity = example()
+    const { id: _id, ...named } = identity
+    const dirty: Record<string, unknown> = { ...named, permissions: 'allow', extra: true }
+    const wired = applyBotfather(library, 'boss', { text: '好。', identity: dirty })
+    expect(wired.wired?.id).toMatch(/^line-[0-9a-f]{8}$/)
+    expect(wired.wired?.permissions).toBe('deferred')
+    expect(readFileSync(join(dir, `${wired.wired?.id}.yml`), 'utf8')).not.toContain('extra')
+    library.saveDraft('boss', { open: true, lines: [{ role: 'user', text: '新建业务线' }] })
+    const long = applyBotfather(library, 'boss', { text: Array.from({ length: 101 }, () => 'word').join(' '), close: true })
+    expect(long.error).toMatch(/100/)
+    expect(library.draft('boss')?.open).toBe(true)
+    expect(applyBotfather(library, 'boss', {}).error).toMatch(/Say something/)
+  })
+
+  it('uses one line\'s smoke for a direct chat and for every connected group', () => {
+    const identity = example()
+    expect(smokeFor([identity], true, 'anywhere')).toBe(identity.smoke)
+    expect(smokeFor([identity], false, 'wr_trade')).toBe(identity.smoke)
+    expect(smokeFor([identity], false, 'wr_other')).toBeUndefined()
+    const open = { ...identity, scope: { directMessages: true, otherChats: 'mentions' as const, groups: [] } }
+    expect(smokeFor([open], false, 'wr_other')).toBe(identity.smoke)
+    expect(checkedSpeech(identity.smoke)).toBe(identity.smoke)
+  })
+
+  it('tells only the orchestrator to call botfather', () => {
+    expect(composePrompt(defaultPrompts(), 'orchestrator')).toContain('call botfather')
+    expect(composePrompt(defaultPrompts(), 'worker')).not.toContain('call botfather')
   })
 })
 
@@ -346,21 +232,6 @@ describe('botfactory-wire', () => {
     })
     expect(mergeWecomConfig({ secret: 'nope' }, '/tmp/identities', [])).not.toHaveProperty('secret')
   })
-
-  it('queues a BotFather question for a direct message and keeps an ordinary greeting', () => {
-    const root = temp()
-    const dir = join(root, 'identities')
-    const library = openFactory(dir)
-    const notices: { text: string }[] = []
-    const ctx = { notify: (message: { text: string }) => { notices.push(message) }, outboundStatus: () => undefined }
-    queueWecomCompanion(ctx, dm('新建业务线', 'boss', 'a'), 'stored', dir)
-    expect(checkedSpeech(notices[0]?.text ?? '')).toContain('这条线叫什么')
-    expect(library.draft('boss')?.slot).toBe('name')
-    queueWecomCompanion(ctx, dm('你好', 'boss', 'c'), 'filtered', dir)
-    expect(notices).toHaveLength(1)
-    queueWecomCompanion(ctx, dm('你好', 'other', 'd'), 'stored')
-    expect(notices[1]?.text).not.toContain('这条线叫什么')
-  })
 })
 
 describe('Feishu on the same identity', () => {
@@ -373,13 +244,14 @@ describe('Feishu on the same identity', () => {
     }
   }
 
-  it('sends the factory question on a Feishu direct message and stays quiet for ordinary chat', () => {
+  it('keeps a Feishu direct message in its own conversation and stays quiet for ordinary chat', () => {
     const dir = join(temp(), 'identities')
     const library = openFactory(dir)
     const started = planCompanion(feishuDm('新建业务线'), library)
-    expect(checkedSpeech(started?.text ?? '')).toContain('这条线叫什么')
+    expect(started?.harness).toBe(true)
+    expect(started?.text).toBeUndefined()
     started?.commit?.()
-    expect(library.draft('feishu-ou_boss')?.slot).toBe('name')
+    expect(library.draft('feishu-ou_boss')?.open).toBe(true)
     expect(library.draft('ou_boss')).toBeUndefined()
     const quiet = openFactory(join(temp(), 'identities'))
     expect(planCompanion(feishuDm('有业务', 'n'), quiet)).toBeUndefined()

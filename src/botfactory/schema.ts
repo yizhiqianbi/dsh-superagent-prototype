@@ -77,26 +77,13 @@ export const BotfatherRouteSchema = z.object({
 export type BotfatherRoute = z.infer<typeof BotfatherRouteSchema>
 export const DEFAULT_ROUTE: BotfatherRoute = { id: 'botfather', name: 'BotFather', route: 'dm', operators: [] }
 
-export const GRILL_SLOTS = ['name', 'persona', 'scope', 'autoReply', 'autoAdvance', 'humanApprove', 'formatter', 'escalation', 'erp', 'smoke', 'confirm'] as const
-export type GrillSlot = typeof GRILL_SLOTS[number]
-export const GrillDraftSchema = z.object({
-  slot: z.enum(GRILL_SLOTS),
-  id: z.string().optional(),
-  name: z.string().optional(),
-  persona: z.string().optional(),
-  directMessages: z.boolean().optional(),
-  otherChats: z.enum(['none', 'mentions']).optional(),
-  groups: z.array(GroupSchema).optional(),
-  /** Which of the two follow-ups was last used. A miss alternates; it never repeats the question. */
-  asks: z.union([z.literal(0), z.literal(1)]).optional(),
-  /** Set when the operator chose “named groups” but has not sent a chat id yet. */
-  listenFor: z.enum(['group-id']).optional(),
-  autoReply: z.array(z.string()).optional(),
-  autoAdvance: z.array(z.string()).optional(),
-  humanApprove: z.array(z.string()).optional(),
-  formatter: z.string().optional(),
-  escalation: z.array(EscalationSchema).optional(),
-  erp: z.discriminatedUnion('enabled', [ErpOffSchema, ErpOnSchema]).optional(),
-  smoke: z.string().optional(),
+const FactoryLineSchema = z.object({
+  role: z.enum(['user', 'assistant']),
+  text: z.string().min(1).max(2000),
 }).strict()
-export type GrillDraft = z.infer<typeof GrillDraftSchema>
+/** An open BotFather conversation. The session asks and decides; this only remembers the talk. */
+export const FactoryDraftSchema = z.object({
+  open: z.literal(true),
+  lines: z.array(FactoryLineSchema).max(40).default([]),
+}).strict()
+export type FactoryDraft = z.infer<typeof FactoryDraftSchema>

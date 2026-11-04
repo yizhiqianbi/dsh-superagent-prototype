@@ -2,7 +2,10 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { Agent } from '@deepseek-ai/dsh-agent'
 import { z } from 'zod'
-import { UserError, followupOwners, key, reasonText, type Decision, type DecisionKind, type EngineForMainSession, type EngineForPeople }
+import { applyBotfather, factoryDir, factoryKey } from '../../botfactory/harness.ts'
+import { pushWecomSettings } from '../../botfactory/settings.ts'
+import { openFactory } from '../../botfactory/store.ts'
+import { UserError, followupOwners, key, reasonText, type Decision, type DecisionKind, type EngineForMainSession, type EngineForPeople, type OutboundMessage }
   from '../../core/index.ts'
 import { IM_WORDS, NOTE_WORDS, wordCount } from '../../infra/text.ts'
 import { AssessmentSchema, EvalReadSchema, WorktreeNameSchema, type MasterAssessor } from '../assessment.ts'
@@ -31,6 +34,8 @@ export interface MainToolsHost {
   sendReplies(): Promise<void>
   /** Runs an Engine command initiated by the main Session without emitting self-notifications. */
   quietly<T>(run: () => T): T
+  /** Sends one message on the trigger's own conversation. */
+  send(message: OutboundMessage): void
 }
 /** Schedules an Engine pass to execute the recorded routing decision and formats the tool response. */
 function routed(host: MainToolsHost, result: { decision?: DecisionKind; reason: string; ticketId?: string | undefined }) {
@@ -151,6 +156,39 @@ function routeTool(host: MainToolsHost): Tool {
     },
   })
 }
+/** Speaks in a BotFather direct message, and writes the template once the session has settled the line. */
+function botfatherTool(host: MainToolsHost): Tool {
+  return tool({
+    name: 'botfather',
+    description: `Speak on the direct message that is opening a business line. Pass trigger_id and the text to say. When the line is settled, also pass identity: name, persona, scope (directMessages, otherChats none or mentions, groups), autoReply, autoAdvance, humanApprove, formatter, escalation, erp, and smoke. id may be omitted. Permissions stay deferred. IM limit: ${IM_WORDS} words.`,
+    schema: z.object({
+      trigger_id: z.string().describe('The candidate card\'s trigger_id.'),
+      text: z.string().optional().describe('What to say on that direct message.'),
+      identity: z.unknown().optional().describe('The business-line template, once the line is settled.'),
+      close: z.boolean().optional().describe('Stop the conversation without writing a template.'),
+    }).strict(),
+    execute: async args => {
+      const trigger = host.store.triggers.get(args.trigger_id)
+      if (!trigger?.channel) return { error: 'That trigger has no conversation to answer.' }
+      const dir = factoryDir(host.store.settings(), trigger)
+      if (!dir) return { error: 'No identity directory is configured.' }
+      const library = openFactory(dir)
+      const result = applyBotfather(library, factoryKey(trigger), args)
+      if (result.error) return { error: result.error }
+      if (result.say) {
+        const purpose = result.wired ? 'wire' : result.closed ? 'close' : 'say'
+        host.send({ id: key('botfather', trigger.id, purpose), channel: trigger.channel, text: result.say, kind: 'notice' })
+        await host.sendReplies()
+      }
+      if (result.wired) {
+        void pushWecomSettings(dir, library.identities()).catch(() => { /* The identity file is already written. */ })
+        return { wired: result.wired.id, name: result.wired.name }
+      }
+      if (result.closed) return { closed: true }
+      return { said: true }
+    },
+  })
+}
 /** Builds the main Session's tools; `agent` scopes prompt preview resources to that Session. */
 export function mainTools(host: MainToolsHost, agent: Agent): Tool[] {
   const resources: MainResourceHost = { ...host.resources, sessions: host.sessions, settings: host.settings }
@@ -158,6 +196,7 @@ export function mainTools(host: MainToolsHost, agent: Agent): Tool[] {
     readTool('Read one page of a resource the resource parameter lists, such as the ticket list or a ticket. Follow next_offset, and next_resource where a page names one.',
       false, (resource, offset, limit, signal) => readResource(resources, resource, offset, limit, undefined, signal)),
     routeTool(host),
+    botfatherTool(host),
     tool({
       name: 'orchestrator_ticket_retry',
       description: 'Start a new assignment on an explicit human request to retry a ticket whose worker reported failed or blocked, or whose input was not delivered; the stalled one ends.',

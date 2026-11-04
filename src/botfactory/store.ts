@@ -1,17 +1,17 @@
-/** Identity files, BotFather drafts, and the chats a line adds beside the Source form. */
+/** Identity files, an open BotFather conversation, and the chats a line adds beside the Source form. */
 import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { WECOM_ID } from '../sources/wecom-trigger.ts'
 import { companionFragment } from './grill.ts'
-import { BotfatherRouteSchema, BusinessIdentitySchema, DEFAULT_ROUTE, GrillDraftSchema, chatChannel, type BusinessIdentity, type GrillDraft } from './schema.ts'
+import { BotfatherRouteSchema, BusinessIdentitySchema, DEFAULT_ROUTE, FactoryDraftSchema, chatChannel, type BusinessIdentity, type FactoryDraft } from './schema.ts'
 import { assertNoSecret } from './secrets.ts'
 import { dumpYaml, parseYaml } from './yaml.ts'
 
 export interface FactoryLibrary {
   identities(): BusinessIdentity[]
   route(): { ok: true; operators: string[] } | { ok: false }
-  draft(userid: string): GrillDraft | undefined
-  saveDraft(userid: string, draft: GrillDraft | null): void
+  draft(userid: string): FactoryDraft | undefined
+  saveDraft(userid: string, draft: FactoryDraft | null): void
   saveIdentity(identity: BusinessIdentity): void
 }
 
@@ -101,7 +101,7 @@ export function openFactory(identitiesDir: string): FactoryLibrary {
     draft(userid) {
       const path = draftPath(drafts, userid)
       if (!path) return undefined
-      try { return GrillDraftSchema.parse(JSON.parse(readFileSync(path, 'utf8')) as unknown) } catch { return undefined }
+      try { return FactoryDraftSchema.parse(JSON.parse(readFileSync(path, 'utf8')) as unknown) } catch { return undefined }
     },
     saveDraft(userid, draft) {
       const path = draftPath(drafts, userid)

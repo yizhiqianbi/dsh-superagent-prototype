@@ -43,7 +43,14 @@ function queueFeishuFactory(ctx: SourceContext, trigger: Trigger, result: Receiv
   const library = identitiesDir ? openFactory(identitiesDir) : undefined
   const plan = planCompanion(trigger, library)
   if (!plan) return
-  const notice = { id: key('feishu-botfather', trigger.id), channel: trigger.channel, text: plan.text, kind: 'notice' as const }
+  const notice = { id: key('feishu-botfather', trigger.id), channel: trigger.channel, text: plan.text ?? SAVE_FAILED, kind: 'notice' as const }
+  if (plan.harness) {
+    try { plan.commit?.() } catch {
+      if (!ctx.outboundStatus(notice.id) && !ctx.outboundStatus(key('ack', trigger.id))) ctx.notify({ ...notice, text: SAVE_FAILED })
+    }
+    return
+  }
+  if (!plan.text) return
   if (ctx.outboundStatus(notice.id) || ctx.outboundStatus(key('ack', trigger.id))) return
   let message = notice
   if (plan.commit) {

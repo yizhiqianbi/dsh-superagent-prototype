@@ -388,11 +388,12 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/sources/wecom-read.ts` | `wecomThreadContext`: the triggering message only, because the long connection has no history |
 | `src/botfactory/schema.ts` | The business-line identity and the BotFather direct-message route. Permissions stay deferred |
 | `src/botfactory/yaml.ts` | The YAML subset those identity files use |
-| `src/botfactory/grill.ts` | BotFather's direct-message grill, one question at a time, on the one WeCom bot |
-| `src/botfactory/store.ts` | Identity files, drafts, and the chats a line adds beside the Source form |
+| `src/botfactory/grill.ts` | The factory entry, a stop, identity ids, and the companion fragment a wired line leaves |
+| `src/botfactory/harness.ts` | Hands a factory direct message to the session, and writes the template once that session settles it |
+| `src/botfactory/store.ts` | Identity files, the open conversation, and the chats a line adds beside the Source form |
 | `src/botfactory/secrets.ts` | Keeps credential values out of BotFactory files and printed lines |
 | `src/botfactory/settings.ts` | Enables the WeCom plugin in the profile patch and copies chats through the management API |
-| `src/botfactory/companion.ts` | Picks the companion line: BotFather in a factory DM, otherwise the wired line's greeting |
+| `src/botfactory/companion.ts` | Leaves a factory direct message to the session; otherwise the wired line's greeting |
 | `src/botfactory/wire.ts` | `botfactory-wire`: validates an identity and writes it onto the local profile |
 | `src/client/index.tsx` | The client plugin entry: the sidebar entry, the main panel and the page in DeepSeek Harness's Plugin Manager |
 | `src/client/app.tsx` | The panel: header, search, glossary, tabs and the page of the current route |
@@ -430,7 +431,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `tests/sources.spec.ts` | The Feishu and GitHub Sources on a `SourceContext`: translation, polls and read positions, the pull request rules, health |
 | `tests/odoo.spec.ts` | The Odoo Source: activity translation, the poll cursor, configuration, channel notes, and the three worker tools' arguments |
 | `tests/wecom.spec.ts` | The WeCom Source: frame translation, gate-card framing, configuration, and the long connection without live credentials |
-| `tests/botfactory.spec.ts` | BotFather's direct-message grill, identity files, and `botfactory-wire` dry-run |
+| `tests/botfactory.spec.ts` | BotFather's session handoff, identity files, and `botfactory-wire` dry-run |
 | `tests/commands.spec.ts` | CLI calls as the deployment's accounts, the Channels' answers, and repository-scoped GitHub calls |
 | `tests/feishu-read.spec.ts`, `tests/github-read.spec.ts` | Feishu and GitHub reads |
 | `tests/admission-context.spec.ts`, `tests/feishu-image.spec.ts` | The Thread window of assessments, and Feishu image reads |

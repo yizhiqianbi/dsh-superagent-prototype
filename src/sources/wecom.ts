@@ -186,6 +186,14 @@ export function queueWecomCompanion(ctx: Pick<SourceContext, 'notify' | 'outboun
   const library = identitiesDir ? openFactory(identitiesDir) : undefined
   const plan = planCompanion(trigger, library)
   if (!plan) return
+  if (plan.harness) {
+    try { plan.commit?.() } catch {
+      const failed = wecomCompanionNotice(trigger, SAVE_FAILED)
+      if (failed && !ctx.outboundStatus(failed.id) && !ctx.outboundStatus(key('ack', trigger.id))) ctx.notify(failed)
+    }
+    return
+  }
+  if (!plan.text) return
   const notice = wecomCompanionNotice(trigger, plan.text)
   if (!notice || ctx.outboundStatus(notice.id) || ctx.outboundStatus(key('ack', trigger.id))) return
   let message = notice
