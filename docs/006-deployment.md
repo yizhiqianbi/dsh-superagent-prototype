@@ -88,7 +88,7 @@ Run the profile-creation command only for a new installation. If the profile alr
 
 ## Machine configuration
 
-Copy [examples/profile.cordis.patch.yml](../examples/profile.cordis.patch.yml) to `~/.dsh/profiles/superagent/cordis.patch.yml`, replacing that file, and replace every `<placeholder>`. For Feishu, also enable the `dsh-superagent-feishu` entry there. The `webserver` entry sets the panel's port.
+Copy [examples/profile.cordis.patch.yml](../examples/profile.cordis.patch.yml) to `~/.dsh/profiles/superagent/cordis.patch.yml`, replacing that file, and replace every `<placeholder>`. For Feishu, also enable the `dsh-superagent-feishu` entry there. For WeCom, enable `dsh-superagent-wecom` the same way; the long-connection Secret stays in the environment, as SETUP.md describes. The `webserver` entry sets the panel's port.
 
 | Key | Required | Meaning |
 | --- | --- | --- |

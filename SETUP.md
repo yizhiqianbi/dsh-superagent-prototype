@@ -79,3 +79,11 @@ Send one message, under 300 words: what will be installed, the accounts and CLIs
 - Where to read more: the numbered documents in `docs/`, in order.
 
 Odoo CRM activities are optional and are not part of the questions above. When the operator wants them, follow [docs/009-odoo.md](docs/009-odoo.md).
+
+WeCom (企业微信) gate reports are optional and are not part of the questions above. When the operator wants the companion to push a gate report to WeCom and read the boss's reply, do it after the plan above, in one extra message:
+
+1. In the WeCom admin console, create a 智能机器人, open API mode, and choose「长连接」. Copy the BotID and the long-connection Secret. The Secret is not the callback Token or EncodingAESKey. Switching API mode away from「长连接」drops this connection.
+2. The operator puts the Secret in the environment of the `superagent` profile, never in chat and never in settings: `WECOM_BOT_SECRET`. The BotID can be `WECOM_BOT_ID` in that same environment, or the BotID field on the Source. Do not commit either value.
+3. Enable the plugin in the profile's `cordis.patch.yml` with `id: dsh-superagent-wecom` and `disabled: false`. Restart. In Sources, turn 企业微信 on. List the group `chatid`s to receive, or turn on direct messages. Under **Eval → On each Source → 企业微信**, list the boss's userid.
+4. One process may hold the long connection for a BotID. A second connection disconnects the first. The boss must message the bot once before a proactive gate report can be delivered. There is no history API: an assessment sees the triggering message only.
+5. Live check, after the operator has done steps 1–3: from the allowed userid, send the bot a direct message or mention it in a listed group. The message is a Trigger. A gate report the companion sends back is markdown, or a button card when the text is a short title plus lines `① …` and `② …`. Clicking a button is another Trigger whose text is that line. This checkout cannot do that check; it has no BotID or Secret.

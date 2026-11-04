@@ -1,16 +1,15 @@
 /** Scoped runtime context exposed to each Source kind, isolating Sources from direct Store or Engine access. */
-import type { EngineForSources, ReceiveResult, Trigger } from '../core/index.ts'
+import type { EngineForSources, Outbox as OutboxPort, ReceiveResult, Trigger } from '../core/index.ts'
 import type { Deployment } from '../deployment.ts'
 import type { Commands } from '../infra/commands.ts'
 import type { SetupProblem } from '../setup.ts'
 import type { SourceContext } from '../sources/host.ts'
 import type { SourceRegistry } from '../sources/registry.ts'
-import type { Outbox } from './outbox.ts'
 import type { Store } from './store.ts'
 
 export interface SourceContextDeps {
   readonly store: Pick<Store, 'atomic' | 'get' | 'set' | 'delete' | 'keys' | 'threads' | 'tickets' | 'triggers' | 'read'>
-  readonly outbox: Pick<Outbox, 'send'>
+  readonly outbox: Pick<OutboxPort, 'send'> & Partial<Pick<OutboxPort, 'status'>>
   readonly engine: Pick<EngineForSources, 'bindThread' | 'threadClosed'>
   readonly commands: Commands
   readonly sources: SourceRegistry
@@ -64,6 +63,7 @@ export function sourceContextOf(deps: SourceContextDeps, kind: { kind: string; h
     },
     triggers: { get: id => store.triggers.get(id), latest: thread => store.read.threadTriggers(thread, 1)[0] },
     notify: message => { deps.outbox.send(message) },
+    outboundStatus: id => deps.outbox.status?.(id),
     report: (entry, value) => {
       if (!kind.health.includes(entry)) throw new Error(`The ${kind.kind} Source has no health entry ${entry}`)
       health.get(entry)?.set(value)

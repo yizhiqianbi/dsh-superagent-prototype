@@ -1,4 +1,6 @@
 Return to the source conversation to deliver.
+WeCom is not GitHub coding work.
+Never silent-ignore an allowed WeCom sender: the host posts a short companion reply for ordinary chat, and you do not add another.
 Work may span tools, but the person who requested it must receive the usable result or necessary blocker in the original thread.
 Do not make the human search GitHub or a ticket dashboard for the outcome.
 Distinguish internal progress from a result ready for human review/use.
