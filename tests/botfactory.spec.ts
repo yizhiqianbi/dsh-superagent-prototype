@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { planCompanion } from '../src/botfactory/companion.ts'
-import { botfatherTurn, chatConflict } from '../src/botfactory/grill.ts'
-import { BotfatherRouteSchema } from '../src/botfactory/schema.ts'
+import { botfatherTurn, chatConflict, smokeFor } from '../src/botfactory/grill.ts'
+import { BotfatherRouteSchema, type GrillDraft } from '../src/botfactory/schema.ts'
 import { scrub } from '../src/botfactory/secrets.ts'
 import { enableWecomPlugin, mergeFeishuConfig, mergeWecomConfig, webPort } from '../src/botfactory/settings.ts'
 import { loadIdentities, openFactory, parseIdentityFile } from '../src/botfactory/store.ts'
@@ -66,10 +66,116 @@ describe('BotFather grill', () => {
     expect(turn.text).toContain('不用先在群里')
     expect(turn.wired).toMatchObject({
       id: 'trade-followup', name: '外贸跟单伴侣', permissions: 'deferred',
-      scope: { directMessages: true, groups: [] }, erp: { enabled: false },
+      scope: { directMessages: true, otherChats: 'none', groups: [] }, erp: { enabled: false },
     })
-    expect(chatConflict([{ ...turn.wired, id: 'other', scope: { directMessages: false, groups: [{ chatId: 'wr_trade' }] } }],
-      { ...turn.wired, scope: { directMessages: true, groups: [{ chatId: 'wr_trade' }] } })).toMatch(/wr_trade/)
+    expect(chatConflict([{ ...turn.wired, id: 'other', scope: { directMessages: false, otherChats: 'none', groups: [{ chatId: 'wr_trade' }] } }],
+      { ...turn.wired, scope: { directMessages: true, otherChats: 'none', groups: [{ chatId: 'wr_trade' }] } })).toMatch(/wr_trade/)
+  })
+
+  it('hears a follow-up colleague and an open range, then moves on without repeating itself', () => {
+    const route = { ok: true, operators: [] } as const
+    const identities = [] as ReturnType<typeof loadIdentities>
+    const say = (text: string, draft?: GrillDraft | null) => {
+      const turn = botfatherTurn({ direct: true, userid: 'boss', text, route, draft: draft ?? undefined, identities })
+      expect(turn.handled).toBe(true)
+      if (!turn.handled) throw new Error('expected a factory turn')
+      checkedSpeech(turn.text)
+      return turn
+    }
+    let turn = say('新建业务线')
+    expect(turn.text).toContain('这条线叫什么')
+    turn = say('就叫跟单吧', turn.draft)
+    expect(turn.draft?.name).toBe('跟单')
+    expect(turn.draft?.slot).toBe('persona')
+    const personaAsk = turn.text
+    turn = say('嗯', turn.draft)
+    expect(turn.draft?.slot).toBe('persona')
+    expect(turn.text).not.toBe(personaAsk)
+    turn = say('他是我们的跟单同事', turn.draft)
+    expect(turn.text).not.toBe(personaAsk)
+    expect(turn.text).not.toContain('它是谁')
+    expect(turn.draft).toMatchObject({ slot: 'scope', persona: '他是我们的跟单同事' })
+    const scopeAsk = turn.text
+    turn = say('再说吧', turn.draft)
+    expect(turn.draft?.slot).toBe('scope')
+    expect(turn.text).not.toBe(scopeAsk)
+    expect(turn.text).toContain('只私聊')
+    expect(turn.text).toContain('指定群')
+    expect(turn.text).toContain('所有已接入')
+    const scopeNudge = turn.text
+    turn = say('再说吧', turn.draft)
+    expect(turn.text).not.toBe(scopeNudge)
+    expect(turn.text).not.toBe(scopeAsk)
+    expect(turn.draft?.slot).toBe('scope')
+    for (const text of ['它open的，所有群里面都行', 'open', 'OPEN', '全员', '所有群里面都行', '到处都能说', '不限群']) {
+      const heard = say(text, { slot: 'scope', id: 'line-1', name: '跟单', persona: '他是我们的跟单同事' })
+      expect(heard.text).not.toBe(scopeAsk)
+      expect(heard.text).not.toContain('它在哪说话')
+      expect(heard.text).toContain('直接回')
+      expect(heard.draft).toMatchObject({ slot: 'autoReply', directMessages: true, otherChats: 'mentions', groups: [] })
+    }
+    turn = say('它open的，所有群里面都行', turn.draft)
+    expect(turn.draft?.slot).toBe('autoReply')
+    const replyAsk = turn.text
+    turn = say('就这些', turn.draft)
+    expect(turn.text).not.toBe(replyAsk)
+    expect(turn.draft).toMatchObject({ slot: 'autoAdvance', autoReply: ['打招呼', '问进度'] })
+    const listed = say('打招呼和问进度', { slot: 'autoReply', id: 'line-1', name: '跟单', persona: '他是我们的跟单同事' })
+    expect(listed.draft?.autoReply).toEqual(['打招呼', '问进度'])
+    turn = say('就这些', turn.draft)
+    turn = say('就这些', turn.draft)
+    expect(turn.draft).toMatchObject({ humanApprove: ['改价格', '承诺交期'], slot: 'formatter' })
+    turn = say('它自己', turn.draft)
+    expect(turn.draft).toMatchObject({ formatter: '跟单同事', slot: 'escalation' })
+    turn = say('就他', turn.draft)
+    expect(turn.draft?.escalation).toEqual([{ name: '外贸负责人' }])
+    turn = say('先不接', turn.draft)
+    expect(turn.draft?.erp).toEqual({ enabled: false })
+    turn = say('你写', turn.draft)
+    expect(turn.draft?.smoke).toBe('在的。我是跟单同事。')
+    expect(turn.text).toContain('所有已接入')
+    const summary = turn.text
+    turn = say('不对', turn.draft)
+    expect(turn.text).not.toBe(summary)
+    expect(turn.draft?.slot).toBe('confirm')
+    turn = say('不对', turn.draft)
+    expect(turn.text).not.toBe(summary)
+    turn = say('可以', turn.draft)
+    expect(turn.wired).toMatchObject({
+      name: '跟单', persona: '他是我们的跟单同事', permissions: 'deferred',
+      scope: { directMessages: true, otherChats: 'mentions', groups: [] },
+      formatter: '跟单同事', smoke: '在的。我是跟单同事。',
+    })
+    expect(turn.text).toContain('所有已接入')
+    expect(turn.text).not.toMatch(/闸门|呈报/)
+    if (!turn.wired) throw new Error('expected a wired line')
+    expect(smokeFor([turn.wired], false, 'wr_anywhere')).toBe('在的。我是跟单同事。')
+    const named = say('私聊，群 wr_trade，还有 oc_room', { slot: 'scope', name: '跟单', persona: '他是我们的跟单同事' })
+    expect(named.draft).toMatchObject({
+      slot: 'autoReply', directMessages: true, otherChats: 'none',
+      groups: [{ chatId: 'wr_trade' }, { chatId: 'oc_room' }],
+    })
+    const first = say('第一个', { slot: 'scope', name: '跟单', persona: '他是我们的跟单同事' })
+    expect(first.draft).toMatchObject({ slot: 'autoReply', directMessages: true, otherChats: 'none', groups: [] })
+    const third = say('第三个', { slot: 'scope', name: '跟单', persona: '他是我们的跟单同事' })
+    expect(third.draft).toMatchObject({ slot: 'autoReply', directMessages: true, otherChats: 'mentions', groups: [] })
+    const picked = say('指定群', { slot: 'scope', name: '跟单', persona: '他是我们的跟单同事' })
+    expect(picked.draft?.slot).toBe('scope')
+    expect(picked.draft?.listenFor).toBe('group-id')
+    expect(picked.text).toContain('wr_')
+    expect(picked.text).not.toContain('它在哪说话')
+    const alongside = say('他是我们的跟单同事，所有群里面都行', { slot: 'persona', id: 'line-1', name: '跟单' })
+    expect(alongside.draft).toMatchObject({
+      slot: 'autoReply', persona: '他是我们的跟单同事', directMessages: true, otherChats: 'mentions',
+    })
+    const erp = say('接 Odoo，以 crm.lead 为准，写 phone', {
+      slot: 'erp', id: 'line-1', name: '跟单', persona: '他是我们的跟单同事',
+      directMessages: true, otherChats: 'mentions', groups: [],
+      autoReply: ['打招呼'], autoAdvance: ['跟单'], humanApprove: ['改价格'],
+      formatter: '跟单同事', escalation: [{ name: '外贸负责人' }],
+    })
+    expect(erp.draft?.slot).toBe('smoke')
+    expect(erp.draft?.erp).toMatchObject({ enabled: true, write: ['phone'] })
   })
 
   it('stays off in groups and for a userid outside the factory route', () => {
@@ -180,7 +286,7 @@ describe('Feishu on the same identity', () => {
 
   it('splits oc_ chats onto Feishu and leaves the Feishu CLI alone', () => {
     const identity = parseIdentityFile(readFileSync(EXAMPLE, 'utf8'))
-    const mixed = { ...identity, scope: { directMessages: true, groups: [...identity.scope.groups, { chatId: 'oc_trade', name: '飞书群' }] } }
+    const mixed = { ...identity, scope: { ...identity.scope, groups: [...identity.scope.groups, { chatId: 'oc_trade', name: '飞书群' }] } }
     const dir = join(temp(), 'identities')
     openFactory(dir).saveIdentity(mixed)
     const wecom = wecomKind.schema.parse({ identitiesDir: dir, chats: [], directMessages: true })

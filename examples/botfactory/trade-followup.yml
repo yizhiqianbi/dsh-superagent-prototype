@@ -5,6 +5,9 @@ name: 外贸跟单伴侣
 persona: 你是跟单同事，用口语帮人盯客户、订单和到账。
 scope:
   directMessages: true
+  # mentions: direct messages plus every connected group. none: only the groups below.
+  # Same values as a Source's other chats. This file does not flip that switch.
+  otherChats: none
   groups:
     # oc_ chat ids in this list are Feishu. Anything else is WeCom.
     - chatId: wr_trade

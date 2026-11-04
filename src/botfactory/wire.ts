@@ -64,10 +64,13 @@ function describe(identity: BusinessIdentity, profile: string | undefined): stri
   const wecomGroups = identity.scope.groups.filter(group => chatChannel(group.chatId) === 'wecom')
   const feishuGroups = identity.scope.groups.filter(group => chatChannel(group.chatId) === 'feishu')
   const show = (groups: typeof identity.scope.groups) => groups.length ? groups.map(group => group.name ? `${group.chatId}（${group.name}）` : group.chatId).join('、') : '无'
+  const where = identity.scope.otherChats === 'mentions'
+    ? `可在私聊和所有已接入的群里说话。点名的企业微信群：${show(wecomGroups)}。飞书群：${show(feishuGroups)}。`
+    : `私聊：${identity.scope.directMessages ? '两边都开' : '这条线不占私聊'}。企业微信群：${show(wecomGroups)}。飞书群：${show(feishuGroups)}。`
   return [
     `校验通过：${identity.name}（${identity.id}）`,
     'BotFather 在企业微信和飞书的私聊里开线，不会新开 BotID。权限先不做。',
-    `私聊：${identity.scope.directMessages ? '两边都开' : '这条线不占私聊'}。企业微信群：${show(wecomGroups)}。飞书群：${show(feishuGroups)}。`,
+    where,
     `写入 ${dir}/${identity.id}.yml`,
     `写入 ${profile ? join(profile, 'botfactory', 'companions', `${identity.id}.md`) : '<profile>/botfactory/companions/' + identity.id + '.md'}`,
     `招呼：${identity.smoke}`,

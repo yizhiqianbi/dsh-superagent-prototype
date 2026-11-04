@@ -25,7 +25,7 @@ DM the bot `新建业务线` (or `/new`). BotFather asks, in order:
 | --- | --- |
 | What the line is called | `id` (template) and `name` |
 | One-line persona | `persona` |
-| Direct messages, group chat ids, or both | `scope.directMessages`, `scope.groups` |
+| Where it speaks: direct messages, named chats, or every connected group | `scope.directMessages`, `scope.groups`, `scope.otherChats` |
 | What it answers immediately | `autoReply` |
 | What it moves forward | `autoAdvance` |
 | What needs a person to decide (需要你拍板) | `humanApprove` |
@@ -35,7 +35,11 @@ DM the bot `新建业务线` (or `/new`). BotFather asks, in order:
 | ERP read/write and source of truth | `erp`. The only adapter is the existing Odoo Source on `crm.lead`. Field names in `write` must be the lead contact whitelist (`phone`, `email_from`, `contact_name`, `partner_name`, `function`, `description`) |
 | Smoke greeting | `smoke` |
 
-Reply `就这样` to wire, or `取消` to drop the draft. A group message never enters the factory. The host posts the question; Eval ignores the turn and does not send a second message.
+Reply `就这样` (or `可以` / `行` / `好`) to wire, or `取消` to drop the draft. A group message never enters the factory. The host posts the question; Eval ignores the turn and does not send a second message.
+
+BotFather asks one block at a time and treats a heard answer as final for that block. It does not ask the same sentence again. A miss gets a different sentence with concrete choices. Colloquial wording is enough: a one-line persona such as 「他是我们的跟单同事」 is stored as said. On a list, 「就这些」 accepts the examples just offered. 「它自己」 lets the line phrase the options. 「你写」 drafts the greeting. Permissions stay `deferred`.
+
+Where it speaks has three answers. 「只私聊」 is direct messages only. A `wr_` or `oc_` id is a named group, with direct messages when the operator also says so. 「open」, 「所有群里面都行」, 「全员」, and the same kind of phrase mean direct messages plus every connected group. That is stored as `scope.directMessages: true` and `scope.otherChats: mentions` — the same `mentions` value a Source uses for other chats. It is not an allow list. BotFather still does not change the Source's other-chats switch, the Feishu CLI, or any credential.
 
 `只私聊` is enough to activate a line on both channels. Wiring does not wait for a group @. WeCom still only pushes group messages that @ the bot. An `oc_` id is added to the Feishu chat list as mentions unless the line says `listen: all`. Direct messages stay on for both Sources, because that is where BotFather talks.
 

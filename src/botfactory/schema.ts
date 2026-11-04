@@ -22,10 +22,15 @@ export const GroupSchema = z.object({
 export const FEISHU_CHAT = /^oc_[a-zA-Z0-9]+$/
 export const FEISHU_OPEN_ID = /^ou_[a-zA-Z0-9]+$/
 export const chatChannel = (chatId: string): 'feishu' | 'wecom' => FEISHU_CHAT.test(chatId) ? 'feishu' : 'wecom'
+/**
+ * `otherChats` is the Source chat policy: `mentions` means every connected group,
+ * `none` means only `groups`. Recording it here does not flip the Source switch.
+ */
 export const ScopeSchema = z.object({
   directMessages: z.boolean(),
+  otherChats: z.enum(['none', 'mentions']).default('none'),
   groups: z.array(GroupSchema).max(40),
-}).strict().refine(scope => scope.directMessages || scope.groups.length > 0, 'Name a direct chat or a group')
+}).strict().refine(scope => scope.directMessages || scope.groups.length > 0 || scope.otherChats === 'mentions', 'Name a direct chat, a group, or every connected group')
   .refine(scope => new Set(scope.groups.map(group => group.chatId)).size === scope.groups.length, 'Duplicate chat IDs')
 export const EscalationSchema = z.object({
   name: z.string().trim().min(1).max(40).refine(plain, 'Use plain speech'),
@@ -80,7 +85,12 @@ export const GrillDraftSchema = z.object({
   name: z.string().optional(),
   persona: z.string().optional(),
   directMessages: z.boolean().optional(),
+  otherChats: z.enum(['none', 'mentions']).optional(),
   groups: z.array(GroupSchema).optional(),
+  /** Which of the two follow-ups was last used. A miss alternates; it never repeats the question. */
+  asks: z.union([z.literal(0), z.literal(1)]).optional(),
+  /** Set when the operator chose “named groups” but has not sent a chat id yet. */
+  listenFor: z.enum(['group-id']).optional(),
   autoReply: z.array(z.string()).optional(),
   autoAdvance: z.array(z.string()).optional(),
   humanApprove: z.array(z.string()).optional(),
