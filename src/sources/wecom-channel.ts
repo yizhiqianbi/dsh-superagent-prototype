@@ -8,10 +8,10 @@ import { SOURCE, gateOptions, wecomTriggerId } from './wecom-trigger.ts'
 
 /** A greeting and nothing else. Anything with a request stays on the ordinary received line. */
 const GREETING = /^(?:你好|您好|嗨|hi|hello|hey|在吗|在么|早上好|下午好|晚上好)[!！。.~～\s]*$/i
-export const WECOM_GREETING = '在的，有闸门或跟单事项直接说。'
-export const WECOM_RECEIVED = '收到了。要决定的事直接说。'
+export const WECOM_GREETING = '在的。跟单、催办、到账确认这类事直接说就行。'
+export const WECOM_RECEIVED = '收到。具体要办的事（客户/订单/节点）说一下，我帮你盯着推进；需要你拍板的我会先把选项列好。'
 
-/** One short companion line. It names no business fact. */
+/** One short companion line. It does not name a customer, an order, or a decision. */
 export function wecomCompanionText(text: string): string {
   return GREETING.test(text.trim()) ? WECOM_GREETING : WECOM_RECEIVED
 }
@@ -59,7 +59,7 @@ function gateCard(text: string, messageId: string): WecomCard['template_card'] |
   const options = gateOptions(text)
   if (options.length < 2) return undefined
   const prose = text.split('\n').map(line => line.trim()).filter(line => line && !gateOptions(line).length)
-  const title = prose[0] ?? '闸门'
+  const title = prose[0] ?? '待确认'
   const detail = prose.slice(1).join('\n')
   if ([...title].length > TITLE_MAX || [...detail].length > DETAIL_MAX) return undefined
   const buttons = options.map((option): WecomButton | undefined => {

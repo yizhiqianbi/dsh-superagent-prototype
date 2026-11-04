@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { WSAuthFailureError } from '@wecom/aibot-node-sdk'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { Engine, key, type Assessor, type Executor, type Trigger } from '../src/core/index.ts'
+import { checkedImText } from '../src/infra/text.ts'
 import { Commands } from '../src/infra/commands.ts'
 import { HealthBoard } from '../src/infra/health.ts'
 import { SettingsSchema, settingsPolicy } from '../src/policy.ts'
@@ -162,31 +163,34 @@ describe('wecom settings', () => {
 
 describe('wecom send framing', () => {
   it('sends markdown, and a button card when the gate report fits', () => {
-    const prose = wecomOutbound('闸门通过，可以合并。', 'group', 'msg-9')
-    expect(prose).toEqual({ chat_type: 2, msgtype: 'markdown', markdown: { content: '闸门通过，可以合并。' } })
-    const card = wecomOutbound('闸门汇报\n① 合并\n② 再看', 'single', 'msg/9')
+    const prose = wecomOutbound('到账确认，可以记上。', 'group', 'msg-9')
+    expect(prose).toEqual({ chat_type: 2, msgtype: 'markdown', markdown: { content: '到账确认，可以记上。' } })
+    const card = wecomOutbound('待你确认\n① 合并\n② 再看', 'single', 'msg/9')
     expect(card).toMatchObject({
       chat_type: 1, msgtype: 'template_card',
       template_card: {
         card_type: 'button_interaction', task_id: wecomTaskId('msg/9'),
-        main_title: { title: '闸门汇报' },
+        main_title: { title: '待你确认' },
         button_list: [{ text: '① 合并', key: '① 合并', style: 1 }, { text: '② 再看', key: '② 再看', style: 1 }],
       },
     })
+    expect(wecomOutbound('① 合并\n② 再看', 'group', 'bare')).toMatchObject({
+      msgtype: 'template_card', template_card: { main_title: { title: '待确认' } },
+    })
     expect(wecomTaskId('msg/9')).toBe('msg9')
-    const long = `闸门\n${'字'.repeat(113)}\n① 合并\n② 再看`
+    const long = `说明\n${'字'.repeat(113)}\n① 合并\n② 再看`
     expect(wecomOutbound(long, 'group', 'm').msgtype).toBe('markdown')
     expect(wecomOutbound('只有一句\n① 合并', 'group', 'm').msgtype).toBe('markdown')
   })
 
   it('pushes on the open connection and treats a missing chat as gone', async () => {
     const message = { id: 'out-1', channel: { source: 'wecom', thread: 'wecom:wr_team', address: { chatId: 'wr_team', chatType: 'group', messageId: 'msg-1' } },
-      text: '闸门通过', kind: 'notice' as const }
+      text: '到账了，可以记上。', kind: 'notice' as const }
     await expect(sendWecom({ commands: {} as never }, message)).rejects.toThrow(/not ready/)
     const socket = new FakeSocket()
     const release = bindWecomSend((chatId, body) => socket.sendMessage(chatId, body))
     expect(await sendWecom({ commands: {} as never }, message)).toBe('sent')
-    expect(socket.sent).toEqual([{ chatId: 'wr_team', body: wecomOutbound('闸门通过', 'group', 'out-1') }])
+    expect(socket.sent).toEqual([{ chatId: 'wr_team', body: wecomOutbound('到账了，可以记上。', 'group', 'out-1') }])
     socket.fail = { errcode: 93000, errmsg: 'chatid invalid' }
     expect(await sendWecom({ commands: {} as never }, message)).toBe('gone')
     socket.fail = new Error('socket closed')
@@ -213,6 +217,9 @@ describe('wecom thread context', () => {
 
 describe('wecom companion', () => {
   it('uses one greeting line or one received line, and does not queue a second notice', () => {
+    expect(`${WECOM_GREETING}\n${WECOM_RECEIVED}`).not.toMatch(/闸门|呈报/)
+    expect(checkedImText(WECOM_GREETING)).toBe(WECOM_GREETING)
+    expect(checkedImText(WECOM_RECEIVED)).toBe(WECOM_RECEIVED)
     expect(wecomCompanionText('你好')).toBe(WECOM_GREETING)
     expect(wecomCompanionText('  Hello! ')).toBe(WECOM_GREETING)
     expect(wecomCompanionText('有业务')).toBe(WECOM_RECEIVED)

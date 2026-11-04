@@ -43,8 +43,8 @@ export const wecomKind: SourceKind<WecomConfig> = {
   kind: SOURCE,
   title: { zh: '企业微信', en: 'WeCom' },
   description: {
-    zh: '通过智能机器人长连接接收已列出的群里 @ 机器人的消息、私聊，以及闸门卡片上的按钮。企业微信不推送群里的其他消息，也没有历史接口。BotID 写在这里或 WECOM_BOT_ID；Secret 只放在 secretEnv 指向的环境变量里。',
-    en: 'Receives @ mentions in the listed chats, direct messages, and gate-card button clicks over the smart-bot long connection. WeCom does not push other group messages and has no history API. The BotID is set here or in WECOM_BOT_ID; the Secret stays in the environment variable named by secretEnv.',
+    zh: '通过智能机器人长连接接收已列出的群里 @ 机器人的消息、私聊，以及选项卡片上的按钮。企业微信不推送群里的其他消息，也没有历史接口。BotID 写在这里或 WECOM_BOT_ID；Secret 只放在 secretEnv 指向的环境变量里。',
+    en: 'Receives @ mentions in the listed chats, direct messages, and option-card button clicks over the smart-bot long connection. WeCom does not push other group messages and has no history API. The BotID is set here or in WECOM_BOT_ID; the Secret stays in the environment variable named by secretEnv.',
   },
   schema: WecomConfigSchema,
   fields: [
@@ -87,7 +87,7 @@ export const wecomKind: SourceKind<WecomConfig> = {
         { key: 'id', type: 'text', label: { zh: 'userid', en: 'userid' }, pattern: '[A-Za-z0-9_@.+/=-]{1,128}' },
         { key: 'name', type: 'text', label: { zh: '名字', en: 'Name' }, optional: true },
       ] }],
-    explicit: { zh: '名单内的人在接收的群里 @ 机器人，或私聊机器人，或点闸门卡片上的按钮。', en: 'Someone on the list mentions the bot in a received chat, messages it directly, or clicks a gate card.' },
+    explicit: { zh: '名单内的人在接收的群里 @ 机器人，或私聊机器人，或点选项卡片上的按钮。', en: 'Someone on the list mentions the bot in a received chat, messages it directly, or clicks an option card.' },
     rows(stored) {
       const config = WecomConfigSchema.parse(stored)
       const mentions = { zh: '仅 @', en: '@ only' }
