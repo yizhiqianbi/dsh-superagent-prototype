@@ -58,7 +58,36 @@ export function chatConflict(existing: readonly BusinessIdentity[], next: Busine
 function namedGroups(identity: BusinessIdentity, channel: 'wecom' | 'feishu'): string {
   const groups = identity.scope.groups.filter(group => chatChannel(group.chatId) === channel)
   if (!groups.length) return '无'
-  return groups.map(group => group.name ? `${group.chatId}（${group.name}）` : group.chatId).join('、')
+  return groups.map(group => {
+    const listen = group.listen === 'all' ? '，listen: all' : ''
+    return group.name ? `${group.chatId}（${group.name}${listen}）` : `${group.chatId}${listen}`
+  }).join('、')
+}
+
+/** What the hang note says about groups. WeCom still requires an @. `listen: all` is Feishu only. */
+function scopeNote(identity: BusinessIdentity): string {
+  const registered = `已登记的企业微信群：${namedGroups(identity, 'wecom')}。已登记的飞书群：${namedGroups(identity, 'feishu')}。`
+  const platform = '企业微信长连接只推送群里 @ 机器人的消息，没有不 @ 也收的模式。飞书 oc_ 群可以写 listen: all，那只对飞书有效。'
+  switch (identity.scope.otherChats) {
+    case 'mentions':
+      return [
+        '主动接群：私聊，已登记的群，以及其余已接入的群里 @ 机器人的消息。',
+        platform,
+        '挂到新机器人时，把已登记的群写进那个来源的「接收的群」，「其他群」选「接收 @」。不要改现在这个来源的开关。',
+        registered,
+      ].join('\n')
+    case 'none':
+      return [
+        `不接其余的群，只留已登记的群。私聊${identity.scope.directMessages ? '开' : '关'}。`,
+        platform,
+        '这些群记在角色里，不会自动加进现在这个机器人。挂到新机器人时再登记，其他群保持不接收。',
+        registered,
+      ].join('\n')
+    default: {
+      const unreachable: never = identity.scope.otherChats
+      return unreachable
+    }
+  }
 }
 
 /**
@@ -77,9 +106,7 @@ export function hangNotice(identity: BusinessIdentity): string {
 
 /** The hang note stored beside the role. Longer than the direct message, still with no credential value. */
 export function roleNote(identity: BusinessIdentity): string {
-  const reach = identity.scope.otherChats === 'mentions'
-    ? '范围：私聊，以及所有已接入的群。挂到新机器人时再设那个来源，不要改现在这个来源的开关。'
-    : `范围：私聊${identity.scope.directMessages ? '开' : '关'}。企业微信群：${namedGroups(identity, 'wecom')}。飞书群：${namedGroups(identity, 'feishu')}。这些群记在角色里，不会自动加进现在这个机器人。`
+  const reach = scopeNote(identity)
   const feishu = identity.scope.groups.some(group => chatChannel(group.chatId) === 'feishu')
     ? ['飞书群只记在角色里。不改飞书命令行，也不改飞书凭证。', '']
     : []
@@ -102,25 +129,53 @@ export function roleNote(identity: BusinessIdentity): string {
     '',
     '1. 在企业微信管理后台新建一个智能机器人。API 模式选「长连接」。',
     '2. 把那个机器人的 BotID 放到它自己的环境变量 `WECOM_BOT_ID`，或写进来源里的 BotID 栏。把长连接 Secret 放到 `WECOM_BOT_SECRET`。不要把这两个值发回对话，也不要写进身份文件。',
-    '3. 让那个 profile 使用上面的身份文件和说法。私聊和群按这份角色自己填到那个机器人的来源里。不要把这条线并进现在跟你说话的这个机器人。',
+    '3. 让那个 profile 使用上面的身份文件和说法。已登记的群写进那个机器人来源的「接收的群」。其他群按这份角色：mentions 是接收 @，none 是不接收。企业微信群里仍然要 @。不要把这条线并进现在跟你说话的这个机器人。',
     '',
     '一个进程里，同一个 BotID 只能保持一条长连接。新马甲用新的 BotID。',
     '',
   ].join('\n')
 }
 
+function listedChats(identity: BusinessIdentity): string {
+  if (!identity.scope.groups.length) return 'none'
+  return identity.scope.groups.map(group => {
+    const channel = chatChannel(group.chatId) === 'feishu' ? 'Feishu' : 'WeCom'
+    const listen = group.listen ? `, listen: ${group.listen}` : ''
+    return group.name ? `${channel} ${group.chatId} (${group.name}${listen})` : `${channel} ${group.chatId}${listen}`
+  }).join(', ')
+}
+
+/** Where the new bot may speak. WeCom still requires an @. `listen: all` is Feishu only. */
+function scopeLines(identity: BusinessIdentity): string[] {
+  const listed = listedChats(identity)
+  const direct = `Direct messages: ${identity.scope.directMessages ? 'yes' : 'no'}.`
+  const platform = 'WeCom delivers a group message only when the bot is @ mentioned. There is no WeCom listen:all. A Feishu oc_ chat may set listen: all.'
+  switch (identity.scope.otherChats) {
+    case 'mentions':
+      return [
+        direct,
+        identity.scope.groups.length
+          ? `Groups: the registered chats, and every other connected group when the bot is @ mentioned. Registered: ${listed}.`
+          : 'Groups: every connected group when the bot is @ mentioned. Registered chats: none.',
+        'On the new bot, register those chats and set other chats to mentions.',
+        platform,
+      ]
+    case 'none':
+      return [
+        direct,
+        `Groups: only the registered chats. Registered: ${listed}.`,
+        'Other connected groups stay off.',
+        platform,
+      ]
+    default: {
+      const unreachable: never = identity.scope.otherChats
+      return unreachable
+    }
+  }
+}
+
 /** Prompt fragment the new bot reads for this role. It is not worn by the bot that ran the conversation. */
 export function companionFragment(identity: BusinessIdentity): string {
-  const named = identity.scope.groups.length
-    ? identity.scope.groups.map(group => {
-      const channel = chatChannel(group.chatId) === 'feishu' ? 'Feishu' : 'WeCom'
-      const listen = group.listen ? `, ${group.listen}` : ''
-      return group.name ? `${channel} ${group.chatId} (${group.name}${listen})` : `${channel} ${group.chatId}${listen}`
-    }).join(', ')
-    : 'none'
-  const groups = identity.scope.otherChats === 'mentions'
-    ? (identity.scope.groups.length ? `every connected group; also ${named}` : 'every connected group')
-    : named
   const erp = identity.erp.enabled
     ? `Odoo is on. Source of truth: ${identity.erp.sourceOfTruth}. Read: ${identity.erp.read.join('; ')}. Write: ${identity.erp.write.join(', ')}. Use the existing Odoo Source only.`
     : 'ERP is off.'
@@ -128,8 +183,6 @@ export function companionFragment(identity: BusinessIdentity): string {
     const ids = [item.wecomUserId, item.feishuOpenId].filter(Boolean).join(', ')
     return ids ? `${item.name} (${ids})` : item.name
   }).join(', ')
-  const open = identity.scope.otherChats !== 'mentions' ? ''
-    : `${identity.scope.directMessages ? 'May speak in direct messages and every connected group.' : 'May speak in every connected group.'}\n\n`
   return [
     `# ${identity.name}`,
     '',
@@ -137,8 +190,7 @@ export function companionFragment(identity: BusinessIdentity): string {
     '',
     `Persona: ${identity.persona}`,
     '',
-    open + `Direct messages: ${identity.scope.directMessages ? 'yes' : 'no'}.`,
-    `Groups: ${groups}.`,
+    ...scopeLines(identity),
     '',
     `Auto-reply: ${identity.autoReply.join('; ')}.`,
     `Auto-advance: ${identity.autoAdvance.join('; ')}.`,

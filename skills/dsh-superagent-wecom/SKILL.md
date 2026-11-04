@@ -28,6 +28,8 @@ Use this when enabling the WeCom Source. The host already delivers replies on th
 
 The package lives under the superagent profile: `botfactory/botfather.yml` is the DM route (an empty `operators` list means any direct message that shows factory intent), `botfactory/identities/<id>.yml` is the role, `botfactory/companions/<id>.md` is how it speaks, and `botfactory/roles/<id>.md` is how to hang it. The Source field `identitiesDir` points at `botfactory/identities` so the grill can store that package. Chats named in a role are not added to this bot. Direct messages have to stay on, because that is where BotFather talks.
 
+主动接群 is the default on a new role: `otherChats: mentions`, and the named chats are registered. On the new bot, put those chats in 接收的群 and set 其他群 to 接收 @. WeCom still only pushes a group message that @ mentions the bot. There is no WeCom mode that hears a group without an @. `otherChats: none` leaves the role on the registered chats only, and those WeCom chats still require an @. A Feishu `oc_` chat on the same role may set `listen: all`; that setting is Feishu only.
+
 Run `pnpm botfactory-wire --init` once so the profile can hold the grill, then DM the bot 「新建业务线」. That conversation thinks about the business and writes the role. Or validate a finished file with `pnpm botfactory-wire --dry-run examples/botfactory/trade-followup.yml` and write the package with the same command without `--dry-run`. After that, the operator creates a new 智能机器人, puts its BotID and Secret in that bot's env or profile, and points it at the role. The command names `WECOM_BOT_SECRET` and does not print its value. See [docs/010-botfactory.md](../../docs/010-botfactory.md).
 
 ## Live check

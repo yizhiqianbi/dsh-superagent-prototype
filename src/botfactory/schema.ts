@@ -15,7 +15,10 @@ const WriteSurfaceSchema = z.string().trim().min(1).max(80).refine(value => {
 export const GroupSchema = z.object({
   chatId: z.string().regex(WECOM_ID),
   name: z.string().trim().min(1).max(60).optional(),
-  /** Feishu listed chats. Omitted on a WeCom chat. `oc_` ids default to mentions when this is absent. */
+  /**
+   * Feishu listed chats only. `all` receives messages that do not @ the bot.
+   * Omitted means mentions. A WeCom chat must omit this: that connection only delivers group messages that @ the bot.
+   */
   listen: z.enum(['mentions', 'all']).optional(),
 }).strict()
 /** Feishu chat ids in this host. Anything else in `groups` is a WeCom chat for the new bot, once the operator hangs the role. */
@@ -23,15 +26,19 @@ export const FEISHU_CHAT = /^oc_[a-zA-Z0-9]+$/
 export const FEISHU_OPEN_ID = /^ou_[a-zA-Z0-9]+$/
 export const chatChannel = (chatId: string): 'feishu' | 'wecom' => FEISHU_CHAT.test(chatId) ? 'feishu' : 'wecom'
 /**
- * `otherChats` is the Source chat policy: `mentions` means every connected group,
- * `none` means only `groups`. Recording it here does not flip the Source switch.
+ * `otherChats` is the Source chat policy, and a new role defaults to `mentions`.
+ * `mentions` registers the named chats and also takes @ mentions in every other connected group.
+ * `none` is the opt-out: only `groups`.
+ * WeCom has no value that hears a group without an @. `listen: all` is only for a Feishu `oc_` chat.
+ * Recording this does not flip the Source switch.
  */
 export const ScopeSchema = z.object({
   directMessages: z.boolean(),
-  otherChats: z.enum(['none', 'mentions']).default('none'),
+  otherChats: z.enum(['none', 'mentions']).default('mentions'),
   groups: z.array(GroupSchema).max(40),
 }).strict().refine(scope => scope.directMessages || scope.groups.length > 0 || scope.otherChats === 'mentions', 'Name a direct chat, a group, or every connected group')
   .refine(scope => new Set(scope.groups.map(group => group.chatId)).size === scope.groups.length, 'Duplicate chat IDs')
+  .refine(scope => scope.groups.every(group => group.listen === undefined || FEISHU_CHAT.test(group.chatId)), 'listen is only for a Feishu oc_ chat. WeCom groups arrive only when the bot is @ mentioned')
 export const EscalationSchema = z.object({
   name: z.string().trim().min(1).max(40).refine(plain, 'Use plain speech'),
   wecomUserId: z.string().regex(WECOM_ID).optional(),

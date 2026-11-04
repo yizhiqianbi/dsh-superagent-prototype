@@ -5,9 +5,9 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { composePrompt, defaultPrompts } from '../src/app/prompts.ts'
 import { planCompanion } from '../src/botfactory/companion.ts'
-import { FACTORY_STOP, ROUTE_BROKEN, hangNotice } from '../src/botfactory/grill.ts'
+import { FACTORY_STOP, ROUTE_BROKEN, companionFragment, hangNotice, roleNote } from '../src/botfactory/grill.ts'
 import { applyBotfather, factoryHandoff } from '../src/botfactory/harness.ts'
-import { BotfatherRouteSchema, type BusinessIdentity } from '../src/botfactory/schema.ts'
+import { BotfatherRouteSchema, BusinessIdentitySchema, type BusinessIdentity } from '../src/botfactory/schema.ts'
 import { scrub } from '../src/botfactory/secrets.ts'
 import { enableWecomPlugin, mergeFeishuConfig, mergeWecomConfig, webPort } from '../src/botfactory/settings.ts'
 import { loadIdentities, openFactory, parseIdentityFile } from '../src/botfactory/store.ts'
@@ -205,7 +205,39 @@ describe('BotFather session', () => {
     expect(composePrompt(defaultPrompts(), 'orchestrator')).toContain('Read the image')
     expect(composePrompt(defaultPrompts(), 'orchestrator')).toContain('new WeCom bot')
     expect(composePrompt(defaultPrompts(), 'orchestrator')).toContain('Do not ask for a BotID')
+    expect(composePrompt(defaultPrompts(), 'orchestrator')).toContain('Do not say the bot hears a WeCom group without an @')
     expect(composePrompt(defaultPrompts(), 'worker')).not.toContain('call botfather')
+  })
+
+  it('defaults a new role to mentions, registers the chats, and keeps WeCom on @', () => {
+    const identity = example()
+    expect(identity.scope.otherChats).toBe('mentions')
+    expect(identity.scope.groups.map(group => group.chatId)).toEqual(['wr_trade'])
+    const { otherChats: _omitted, ...scope } = identity.scope
+    expect(BusinessIdentitySchema.parse({ ...identity, scope }).scope.otherChats).toBe('mentions')
+    const quiet = BusinessIdentitySchema.parse({ ...identity, scope: { ...identity.scope, otherChats: 'none' } })
+    expect(quiet.scope.otherChats).toBe('none')
+    expect(roleNote(identity)).toContain('主动接群')
+    expect(roleNote(identity)).toContain('只推送群里 @')
+    expect(roleNote(identity)).toContain('接收的群')
+    expect(roleNote(quiet)).toContain('不接其余的群')
+    expect(roleNote(quiet)).toContain('只推送群里 @')
+    expect(companionFragment(identity)).toContain('only when the bot is @ mentioned')
+    expect(companionFragment(identity)).toContain('no WeCom listen:all')
+    expect(companionFragment(identity)).toContain('wr_trade')
+    expect(() => BusinessIdentitySchema.parse({
+      ...identity,
+      scope: { directMessages: true, otherChats: 'mentions', groups: [{ chatId: 'wr_trade', name: '外贸跟单群', listen: 'all' }] },
+    })).toThrow(/Feishu/)
+    const feishu = BusinessIdentitySchema.parse({
+      ...identity,
+      scope: { directMessages: true, groups: [{ chatId: 'oc_trade', name: '飞书跟单', listen: 'all' }] },
+    })
+    expect(feishu.scope.otherChats).toBe('mentions')
+    expect(feishu.scope.groups).toEqual([{ chatId: 'oc_trade', name: '飞书跟单', listen: 'all' }])
+    expect(companionFragment(feishu)).toContain('listen: all')
+    expect(roleNote(feishu)).toContain('listen: all')
+    expect(roleNote(feishu)).toContain('只对飞书有效')
   })
 })
 

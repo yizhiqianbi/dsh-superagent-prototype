@@ -159,7 +159,7 @@ function routeTool(host: MainToolsHost): Tool {
 function botfatherTool(host: MainToolsHost): Tool {
   return tool({
     name: 'botfather',
-    description: `Speak on the direct message that is opening a business line. Pass trigger_id and the text to say. When the line is settled, also pass identity: name, persona, scope (directMessages, otherChats none or mentions, groups), autoReply, autoAdvance, humanApprove, formatter, escalation, erp, and smoke. id may be omitted. The identity is a role for a new WeCom bot the operator will create. Do not include a BotID or a Secret. Permissions stay deferred. IM limit: ${IM_WORDS} words.`,
+    description: `Speak on the direct message that is opening a business line. Pass trigger_id and the text to say. When the line is settled, also pass identity: name, persona, scope (directMessages, otherChats defaulting to mentions, and the groups to register; otherChats none only to leave out other connected groups; listen all only on a Feishu oc_ group), autoReply, autoAdvance, humanApprove, formatter, escalation, erp, and smoke. id may be omitted. The identity is a role for a new WeCom bot the operator will create. WeCom delivers a group message only when the bot is @ mentioned. Do not include a BotID or a Secret. Permissions stay deferred. IM limit: ${IM_WORDS} words.`,
     schema: z.object({
       trigger_id: z.string().describe('The candidate card\'s trigger_id.'),
       text: z.string().optional().describe('What to say on that direct message.'),

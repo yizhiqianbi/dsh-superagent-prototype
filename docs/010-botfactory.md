@@ -36,7 +36,7 @@ The file is the template. The session fills it. The host checks it and writes it
 | --- | --- |
 | What the line is called | `id` (template; derived from `name` when omitted) and `name` |
 | One-line persona | `persona` |
-| Where it speaks: direct messages, named chats, or every connected group | `scope.directMessages`, `scope.groups`, `scope.otherChats` |
+| Where it speaks: direct messages, registered chats, and other connected groups | `scope.directMessages`, `scope.groups`, `scope.otherChats` (default `mentions`) |
 | What it answers immediately | `autoReply` |
 | What it moves forward | `autoAdvance` |
 | What needs a person to decide (需要你拍板) | `humanApprove` |
@@ -46,7 +46,11 @@ The file is the template. The session fills it. The host checks it and writes it
 | ERP read/write and source of truth | `erp`. The only adapter is the existing Odoo Source on `crm.lead`. Field names in `write` must be the lead contact whitelist (`phone`, `email_from`, `contact_name`, `partner_name`, `function`, `description`) |
 | Smoke greeting | `smoke` |
 
-Where it speaks is `scope`. A named group is a `wr_` id on WeCom or an `oc_` id on Feishu. Every connected group is `scope.directMessages` plus `scope.otherChats: mentions` — the same `mentions` value a Source uses for other chats. Recording it does not flip the Source switch, the Feishu CLI, or any credential.
+Where it speaks is `scope`. 主动接群 is the default for a new role: `scope.otherChats` is `mentions`, and every named chat is registered in `scope.groups`. `mentions` is the same value a Source uses for other chats. On the new bot the operator copies those chats into 接收的群 and sets 其他群 to 接收 @.
+
+WeCom's long connection only delivers a group message that @ mentions the bot. A role cannot ask WeCom to listen without an @, and a WeCom chat must not set `listen`. `otherChats: none` is the opt-out: only the registered chats, and a WeCom group in that list still arrives only on an @. A Feishu chat id starts with `oc_`. On that chat, `listen: all` is optional and receives messages that do not @ the bot; omitted `listen` means mentions. Feishu `otherChats` is still only `none` or `mentions`.
+
+Recording the scope does not flip the Source switch on the bot that wrote the role, the Feishu CLI, or any credential.
 
 The scope is what the operator copies onto the new bot. It does not become an admission row on the bot that wrote the role. The userid and open_id lists are untouched. A group another role already owns is refused.
 
@@ -54,7 +58,7 @@ The factory bot keeps its own greeting. On Feishu the host stays quiet except fo
 
 ## After it settles
 
-The host says, in Chinese, which files it wrote and how to hang them: create a new 智能机器人 in the WeCom admin console, choose the long connection, put that bot's BotID and Secret in its own env or profile (`WECOM_BOT_ID`, `WECOM_BOT_SECRET`), and point that profile at this role. The conversation does not ask for those values. The longer steps are in `botfactory/roles/<id>.md`.
+The host says, in Chinese, which files it wrote and how to hang them: create a new 智能机器人 in the WeCom admin console, choose the long connection, put that bot's BotID and Secret in its own env or profile (`WECOM_BOT_ID`, `WECOM_BOT_SECRET`), and point that profile at this role. The hang note also says to register the named chats on that bot and set 其他群 from the role. WeCom groups on that bot still arrive only when someone @ mentions it. The conversation does not ask for a BotID or a Secret. The longer steps are in `botfactory/roles/<id>.md`.
 
 ## Both channels
 
