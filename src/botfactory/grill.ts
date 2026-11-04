@@ -2,13 +2,13 @@
 import { createHash } from 'node:crypto'
 import { wordCount, IM_WORDS } from '../infra/text.ts'
 import { WECOM_ID } from '../sources/wecom-trigger.ts'
-import { BusinessIdentitySchema, PLAIN_SPEECH, type BusinessIdentity, type ErpConfig, type GrillDraft, type GrillSlot } from './schema.ts'
+import { BusinessIdentitySchema, FEISHU_OPEN_ID, PLAIN_SPEECH, chatChannel, type BusinessIdentity, type ErpConfig, type GrillDraft, type GrillSlot } from './schema.ts'
 
 const STARTS = ['新建业务线', '新业务线', '开一条线', '做一条业务线', '/botfather', '/new', 'botfather']
 const QUESTIONS: Record<Exclude<GrillSlot, 'confirm'>, string> = {
   name: '这条线叫什么？例如：外贸跟单伴侣。',
   persona: '用一句话说它是谁。例如：你是跟单同事，口语盯客户、订单和到账。',
-  scope: '它在哪说话？「只私聊」马上能用。要加群就写：私聊，群 wr_xxx。',
+  scope: '它在哪说话？「只私聊」马上能用。企业微信群写 wr_，飞书群写 oc_。例如：私聊，群 wr_xxx。',
   autoReply: '哪些话直接回？例如：打招呼、问进度。',
   autoAdvance: '哪些事直接往下推进？例如：跟单、催办、到账确认。',
   humanApprove: '哪些事要对方拍板？例如：改价格、承诺交期。',
@@ -84,12 +84,13 @@ function parseList(text: string): string[] | undefined {
   return items
 }
 
-function parseEscalation(text: string): { name: string; wecomUserId?: string }[] | undefined {
+function parseEscalation(text: string): { name: string; wecomUserId?: string; feishuOpenId?: string }[] | undefined {
   const items = parseList(text)
   if (!items) return undefined
   const contacts = items.map(item => {
     const parts = item.split(/\s+/)
     const last = parts.at(-1) ?? ''
+    if (parts.length >= 2 && FEISHU_OPEN_ID.test(last)) return { name: parts.slice(0, -1).join(' '), feishuOpenId: last }
     if (parts.length >= 2 && WECOM_ID.test(last)) return { name: parts.slice(0, -1).join(' '), wecomUserId: last }
     return { name: item }
   })
@@ -271,16 +272,23 @@ export function smokeFor(identities: readonly BusinessIdentity[], direct: boolea
 /** Prompt fragment the companion reads for one wired line. */
 export function companionFragment(identity: BusinessIdentity): string {
   const groups = identity.scope.groups.length
-    ? identity.scope.groups.map(group => group.name ? `${group.chatId} (${group.name})` : group.chatId).join(', ')
+    ? identity.scope.groups.map(group => {
+      const channel = chatChannel(group.chatId) === 'feishu' ? 'Feishu' : 'WeCom'
+      const listen = group.listen ? `, ${group.listen}` : ''
+      return group.name ? `${channel} ${group.chatId} (${group.name}${listen})` : `${channel} ${group.chatId}${listen}`
+    }).join(', ')
     : 'none'
   const erp = identity.erp.enabled
     ? `Odoo is on. Source of truth: ${identity.erp.sourceOfTruth}. Read: ${identity.erp.read.join('; ')}. Write: ${identity.erp.write.join(', ')}. Use the existing Odoo Source only.`
     : 'ERP is off.'
-  const escalation = identity.escalation.map(item => item.wecomUserId ? `${item.name} (${item.wecomUserId})` : item.name).join(', ')
+  const escalation = identity.escalation.map(item => {
+    const ids = [item.wecomUserId, item.feishuOpenId].filter(Boolean).join(', ')
+    return ids ? `${item.name} (${ids})` : item.name
+  }).join(', ')
   return [
     `# ${identity.name}`,
     '',
-    `Template id \`${identity.id}\`. This line shares the one WeCom bot. BotFather wired it from a direct message. It is active without a group mention. The platform still only pushes group messages that @ the bot.`,
+    `Template id \`${identity.id}\`. This line shares the existing WeCom bot and the existing Feishu bot. BotFather wired it from a direct message on either channel. It is active without a group mention. WeCom still only pushes group messages that @ the bot. Feishu group ids start with oc_.`,
     '',
     `Persona: ${identity.persona}`,
     '',

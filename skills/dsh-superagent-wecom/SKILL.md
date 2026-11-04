@@ -28,7 +28,7 @@ BotFather is a direct-message factory on this same bot. It is not a second BotID
 
 Identities live under the superagent profile: `botfactory/botfather.yml` is the DM route (an empty `operators` list means any direct message that shows factory intent), `botfactory/identities/<id>.yml` is one business line, and `botfactory/companions/<id>.md` is the speech the companion uses. The Source field `identitiesDir` points at `botfactory/identities`. The same directory is also unioned into the WeCom chat list and the admission rows, so a line is active without a group @. WeCom still only pushes group messages that @ the bot. Direct messages have to stay on, because that is where BotFather talks.
 
-Run `pnpm botfactory-wire --init` once so the profile listens, then DM the bot 「新建业务线」. Or validate a finished file with `pnpm botfactory-wire --dry-run examples/botfactory/trade-followup.yml` and wire it with the same command without `--dry-run`. The command does not print `WECOM_BOT_SECRET`. See [docs/010-botfactory.md](../../docs/010-botfactory.md).
+Run `pnpm botfactory-wire --init` once so the profile listens on both channels, then DM either bot 「新建业务线」. Or validate a finished file with `pnpm botfactory-wire --dry-run examples/botfactory/trade-followup.yml` and wire it with the same command without `--dry-run`. A group id starting with `oc_` is written to the Feishu Source; any other group id is written to WeCom. Both keep direct messages on. The command does not print `WECOM_BOT_SECRET`. See [docs/010-botfactory.md](../../docs/010-botfactory.md).
 
 ## Live check
 

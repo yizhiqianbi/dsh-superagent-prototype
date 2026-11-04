@@ -3,7 +3,7 @@ import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { dirname, join } from 'node:path'
 import { WECOM_ID } from '../sources/wecom-trigger.ts'
 import { companionFragment } from './grill.ts'
-import { BotfatherRouteSchema, BusinessIdentitySchema, DEFAULT_ROUTE, GrillDraftSchema, type BusinessIdentity, type GrillDraft } from './schema.ts'
+import { BotfatherRouteSchema, BusinessIdentitySchema, DEFAULT_ROUTE, GrillDraftSchema, chatChannel, type BusinessIdentity, type GrillDraft } from './schema.ts'
 import { assertNoSecret } from './secrets.ts'
 import { dumpYaml, parseYaml } from './yaml.ts'
 
@@ -36,13 +36,21 @@ function document(text: string): unknown {
   return parseYaml(text)
 }
 
-/** Group chats named by identity files. A file that does not parse is skipped. Missing directories are no chats. */
+/** Group chats named by identity files. `oc_` ids belong to Feishu; the rest belong to WeCom. A file that does not parse is skipped. */
 export function identityGroupChats(dir: string): { chatId: string; name?: string }[] {
+  return identityChats(dir, 'wecom').map(({ chatId, name }) => ({ chatId, ...name ? { name } : {} }))
+}
+
+export function identityFeishuChats(dir: string): { chatId: string; name?: string; listen: 'mentions' | 'all' }[] {
+  return identityChats(dir, 'feishu').map(group => ({
+    chatId: group.chatId, ...group.name ? { name: group.name } : {}, listen: group.listen ?? 'mentions',
+  }))
+}
+
+function identityChats(dir: string, channel: 'wecom' | 'feishu'): { chatId: string; name?: string; listen?: 'mentions' | 'all' }[] {
   if (!dir) return []
   try {
-    return unionChats([], loadIdentities(dir).flatMap(identity => identity.scope.groups.map(group => ({
-      chatId: group.chatId, ...group.name ? { name: group.name } : {},
-    }))))
+    return unionChats([], loadIdentities(dir).flatMap(identity => identity.scope.groups.filter(group => chatChannel(group.chatId) === channel)))
   } catch {
     return []
   }

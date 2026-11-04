@@ -4,7 +4,8 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { chatConflict } from './grill.ts'
 import { scrub } from './secrets.ts'
-import { enableWecomPlugin, pushWecomSettings } from './settings.ts'
+import { chatChannel } from './schema.ts'
+import { enableFeishuPlugin, enableWecomPlugin, pushWecomSettings } from './settings.ts'
 import { ensureRoute, loadIdentities, openFactory, parseIdentityFile } from './store.ts'
 import type { BusinessIdentity } from './schema.ts'
 
@@ -18,7 +19,7 @@ export interface WireOptions {
 }
 
 function usage(): string {
-  return '用法: botfactory-wire [--dry-run] [--profile 目录] [--init] [身份文件.yml]\nBotFather 是这一个企业微信机器人的私聊工厂，不会新开 BotID。'
+  return '用法: botfactory-wire [--dry-run] [--profile 目录] [--init] [身份文件.yml]\nBotFather 在企业微信和飞书的私聊里开线，不会新开 BotID。'
 }
 
 /** The superagent profile that already has a cordis patch, when one is on this machine. */
@@ -60,11 +61,13 @@ function identitiesDir(profile: string): string {
 
 function describe(identity: BusinessIdentity, profile: string | undefined): string[] {
   const dir = profile ? identitiesDir(profile) : '<profile>/botfactory/identities'
-  const groups = identity.scope.groups.map(group => group.name ? `${group.chatId}（${group.name}）` : group.chatId)
+  const wecomGroups = identity.scope.groups.filter(group => chatChannel(group.chatId) === 'wecom')
+  const feishuGroups = identity.scope.groups.filter(group => chatChannel(group.chatId) === 'feishu')
+  const show = (groups: typeof identity.scope.groups) => groups.length ? groups.map(group => group.name ? `${group.chatId}（${group.name}）` : group.chatId).join('、') : '无'
   return [
     `校验通过：${identity.name}（${identity.id}）`,
-    'BotFather 在这一个机器人的私聊里开线，不会新开 BotID。权限先不做。',
-    `私聊：${identity.scope.directMessages ? '开' : '这条线不占私聊'}。群：${groups.length ? groups.join('、') : '无'}。`,
+    'BotFather 在企业微信和飞书的私聊里开线，不会新开 BotID。权限先不做。',
+    `私聊：${identity.scope.directMessages ? '两边都开' : '这条线不占私聊'}。企业微信群：${show(wecomGroups)}。飞书群：${show(feishuGroups)}。`,
     `写入 ${dir}/${identity.id}.yml`,
     `写入 ${profile ? join(profile, 'botfactory', 'companions', `${identity.id}.md`) : '<profile>/botfactory/companions/' + identity.id + '.md'}`,
     `招呼：${identity.smoke}`,
@@ -105,13 +108,13 @@ export async function runBotfactory(options: WireOptions): Promise<number> {
     ensureRoute(dir)
     if (identity) openFactory(dir).saveIdentity(identity)
     const patch = readFileSync(patchPath, 'utf8')
-    const next = enableWecomPlugin(patch)
+    const next = enableFeishuPlugin(enableWecomPlugin(patch))
     if (next !== patch) writeFileSync(patchPath, next)
     const identities = loadIdentities(dir)
     const status = await pushWecomSettings(dir, identities, options.fetch ?? fetch)
     for (const line of lines) log(scrub(line, env))
     log(scrub(status, env))
-    log(next === patch ? '企业微信插件本来就是开的。' : '已在 cordis.patch.yml 里打开企业微信插件。改插件开关要重启一次。')
+    log(next === patch ? '企业微信和飞书插件本来就是开的。' : '已在 cordis.patch.yml 里打开企业微信和飞书插件。改插件开关要重启一次。')
     return 0
   } catch (cause) {
     error(scrub(cause instanceof Error ? cause.message : '接线失败', env))

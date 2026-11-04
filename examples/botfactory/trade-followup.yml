@@ -6,6 +6,7 @@ persona: 你是跟单同事，用口语帮人盯客户、订单和到账。
 scope:
   directMessages: true
   groups:
+    # oc_ chat ids in this list are Feishu. Anything else is WeCom.
     - chatId: wr_trade
       name: 外贸跟单群
 autoReply:

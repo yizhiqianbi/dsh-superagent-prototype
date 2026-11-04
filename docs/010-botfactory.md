@@ -37,11 +37,15 @@ DM the bot `新建业务线` (or `/new`). BotFather asks, in order:
 
 Reply `就这样` to wire, or `取消` to drop the draft. A group message never enters the factory. The host posts the question; Eval ignores the turn and does not send a second message.
 
-`只私聊` is enough to activate a line. Wiring does not wait for a group @. WeCom still only pushes group messages that @ the bot, so a listed group speaks when someone @s the bot there. Direct messages must stay on, because that is where BotFather talks.
+`只私聊` is enough to activate a line on both channels. Wiring does not wait for a group @. WeCom still only pushes group messages that @ the bot. An `oc_` id is added to the Feishu chat list as mentions unless the line says `listen: all`. Direct messages stay on for both Sources, because that is where BotFather talks.
 
-Each group chat id becomes an admission row with the same cells as a chat typed into the Source form (mentions only). The row shows up from the identity file even before the form's chat list is refreshed. Listed senders who @ the bot, or who DM it, stay explicit requests under the existing userid list.
+A WeCom chat id becomes a WeCom admission row. An `oc_` id becomes a Feishu admission row. The userid and open_id lists are untouched.
 
-When one line owns the chat, a greeting uses that line's `smoke`. Several lines sharing direct messages keep the shared greeting, and the companion fragment says which persona is which.
+When one line owns the chat, a greeting uses that line's `smoke`. On Feishu the host sends that greeting and the factory questions, and stays quiet for other chat. Several lines sharing direct messages keep the shared greeting.
+
+## Both channels
+
+The same identity file wires both bots. Chat ids other than `oc_` go to WeCom. `oc_` chat ids go to Feishu. `pnpm botfactory-wire` turns on `dsh-superagent-wecom` and `dsh-superagent-feishu`, sets `identitiesDir` on both Sources, and turns direct messages on. It does not change the Feishu CLI or the Feishu other-chats policy. A Feishu draft is stored apart from the WeCom draft. An operator id in `botfather.yml` may be a WeCom userid or a Feishu `ou_` open_id.
 
 ## Wire command
 
@@ -51,7 +55,7 @@ pnpm botfactory-wire --dry-run examples/botfactory/trade-followup.yml
 pnpm botfactory-wire examples/botfactory/trade-followup.yml
 ```
 
-`--init` writes `botfather.yml` if it is missing, turns on `dsh-superagent-wecom` in the profile `cordis.patch.yml`, and, when the panel on `127.0.0.1` answers, turns direct messages on and sets `identitiesDir`. `--dry-run` validates and prints the smoke line. It does not write files. A real run also copies new group chat ids into the WeCom Source when that panel answers. If the panel is down, the files are still written; run the command again once the panel is up so the Source stores the directory and the chats. The command never prints `WECOM_BOT_SECRET`.
+`--init` writes `botfather.yml` if it is missing, turns on `dsh-superagent-wecom` and `dsh-superagent-feishu` in the profile `cordis.patch.yml`, and, when the panel on `127.0.0.1` answers, turns direct messages on and sets `identitiesDir` on both Sources. `--dry-run` validates and prints the smoke line. It does not write files. A real run copies `oc_` chats to Feishu and the other chats to WeCom when that panel answers. If the panel is down, the files are still written; run the command again once the panel is up so each Source stores the directory and its chats. The command never prints `WECOM_BOT_SECRET`.
 
 Changing the plugin from disabled to enabled needs one restart. Chat and directory changes do not.
 

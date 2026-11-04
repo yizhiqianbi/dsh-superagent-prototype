@@ -7,13 +7,15 @@ import { planCompanion } from '../src/botfactory/companion.ts'
 import { botfatherTurn, chatConflict } from '../src/botfactory/grill.ts'
 import { BotfatherRouteSchema } from '../src/botfactory/schema.ts'
 import { scrub } from '../src/botfactory/secrets.ts'
-import { enableWecomPlugin, mergeWecomConfig, webPort } from '../src/botfactory/settings.ts'
+import { enableWecomPlugin, mergeFeishuConfig, mergeWecomConfig, webPort } from '../src/botfactory/settings.ts'
 import { loadIdentities, openFactory, parseIdentityFile } from '../src/botfactory/store.ts'
 import { runBotfactory } from '../src/botfactory/wire.ts'
 import { parseYaml } from '../src/botfactory/yaml.ts'
 import { checkedImText } from '../src/infra/text.ts'
+import { feishuKind } from '../src/sources/feishu.ts'
 import { queueWecomCompanion, wecomKind } from '../src/sources/wecom.ts'
 import { wecomTrigger } from '../src/sources/wecom-trigger.ts'
+import type { Trigger } from '../src/core/index.ts'
 
 const NOW = '2026-11-04T03:00:00.000Z'
 const EXAMPLE = join(import.meta.dirname, '../examples/botfactory/trade-followup.yml')
@@ -150,5 +152,48 @@ describe('botfactory-wire', () => {
     expect(notices).toHaveLength(1)
     queueWecomCompanion(ctx, dm('你好', 'other', 'd'), 'stored')
     expect(notices[1]?.text).not.toContain('这条线叫什么')
+  })
+})
+
+describe('Feishu on the same identity', () => {
+  function feishuDm(text: string, msgid = 'm'): Trigger {
+    return {
+      id: `feishu:${msgid}`, source: 'feishu', threads: [{ source: 'feishu', id: 'oc_dm:m' }],
+      actor: { source: 'feishu', id: 'ou_boss' }, human: true, addressed: 'direct', at: NOW, text,
+      channel: { source: 'feishu', thread: 'feishu:oc_dm', address: { chatId: 'oc_dm', messageId: msgid, direct: 'true' } },
+      meta: { chatId: 'oc_dm', messageId: msgid, direct: true },
+    }
+  }
+
+  it('sends the factory question on a Feishu direct message and stays quiet for ordinary chat', () => {
+    const dir = join(temp(), 'identities')
+    const library = openFactory(dir)
+    const started = planCompanion(feishuDm('新建业务线'), library)
+    expect(checkedSpeech(started?.text ?? '')).toContain('这条线叫什么')
+    started?.commit?.()
+    expect(library.draft('feishu-ou_boss')?.slot).toBe('name')
+    expect(library.draft('ou_boss')).toBeUndefined()
+    const quiet = openFactory(join(temp(), 'identities'))
+    expect(planCompanion(feishuDm('有业务', 'n'), quiet)).toBeUndefined()
+    expect(planCompanion(feishuDm('新建业务线', 'o'), undefined)?.text).toContain('--init')
+  })
+
+  it('splits oc_ chats onto Feishu and leaves the Feishu CLI alone', () => {
+    const identity = parseIdentityFile(readFileSync(EXAMPLE, 'utf8'))
+    const mixed = { ...identity, scope: { directMessages: true, groups: [...identity.scope.groups, { chatId: 'oc_trade', name: '飞书群' }] } }
+    const dir = join(temp(), 'identities')
+    openFactory(dir).saveIdentity(mixed)
+    const wecom = wecomKind.schema.parse({ identitiesDir: dir, chats: [], directMessages: true })
+    const feishu = feishuKind.schema.parse({ identitiesDir: dir, cli: '/Users/pencil/.local/bin/lark-bot', directMessages: true, otherChats: 'mentions' })
+    expect(wecomKind.scope!({ meta: { chatId: 'wr_trade', direct: false } }, wecom).listened).toBe(true)
+    expect(wecomKind.scope!({ meta: { chatId: 'oc_trade', direct: false } }, wecom).listened).toBe(false)
+    expect(feishuKind.scope!({ meta: { chatId: 'oc_trade', direct: false } }, feishu)).toMatchObject({ listened: true, row: 'oc_trade' })
+    expect(mergeWecomConfig({ chats: [] }, dir, [mixed]).chats).toEqual([{ chatId: 'wr_trade', name: '外贸跟单群' }])
+    expect(mergeFeishuConfig({ cli: '/Users/pencil/.local/bin/lark-bot', otherChats: 'mentions', chats: [{ chatId: 'oc_old', listen: 'all' }] }, dir, [mixed])).toMatchObject({
+      cli: '/Users/pencil/.local/bin/lark-bot', otherChats: 'mentions', directMessages: true,
+      chats: [{ chatId: 'oc_old', listen: 'all' }, { chatId: 'oc_trade', name: '飞书群', listen: 'mentions' }],
+    })
+    const wired = planCompanion(feishuDm('你好'), openFactory(dir))
+    expect(wired?.text).toBe(identity.smoke)
   })
 })
